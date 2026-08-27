@@ -150,14 +150,38 @@ def measure_rotation(ref: np.ndarray, cur: np.ndarray, K: np.ndarray) -> dict[st
     return result
 
 
-def _grab(mini: ReachyMini, retries: int = 15, delay: float = 0.1) -> np.ndarray:
-    """Pull a camera frame, tolerating the stream not being warm yet."""
-    for _ in range(retries):
+def _fingerprint(frame: np.ndarray) -> bytes:
+    """Cheap identity check for a frame - a strided subsample, not a full hash."""
+    return np.ascontiguousarray(frame[::16, ::16]).tobytes()
+
+
+def _grab(
+    mini: ReachyMini,
+    after: np.ndarray | None = None,
+    timeout: float = 4.0,
+    delay: float = 0.05,
+) -> np.ndarray:
+    """Pull a camera frame, optionally insisting it is newer than `after`.
+
+    `get_frame()` hands back the last decoded frame, so a stalled stream
+    returns the *same* image indefinitely. Comparing two identical frames
+    yields a confident "0 degrees of rotation" - a false PASS on a broken
+    camera, or a false FAIL on a working robot. So when a fresh frame is
+    required and none arrives, raise rather than measure.
+    """
+    previous = _fingerprint(after) if after is not None else None
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         frame = mini.media.get_frame()
-        if frame is not None:
+        if frame is not None and (previous is None or _fingerprint(frame) != previous):
             return frame
         time.sleep(delay)
-    raise RuntimeError("no camera frame available - is the media backend up?")
+
+    if previous is None:
+        raise RuntimeError("no camera frame available - is the media backend up?")
+    raise RuntimeError(
+        f"camera stream stalled: no new frame within {timeout:.0f}s (the last frame kept repeating)"
+    )
 
 
 def validate_rotation(
@@ -187,7 +211,18 @@ def validate_rotation(
 
     mini.goto_target(head=create_head_pose(**{axis: angle_deg}), body_yaw=0.0, duration=duration)
     time.sleep(settle)
-    cur = _grab(mini)
+    try:
+        cur = _grab(mini, after=ref)
+    except RuntimeError as exc:
+        mini.goto_target(head=create_head_pose(), body_yaw=0.0, duration=duration)
+        return {
+            "ok": False,
+            "passed": False,
+            "axis": axis,
+            "expected_deg": angle_deg,
+            "error": str(exc),
+            "detail": str(exc),
+        }
 
     mini.goto_target(head=create_head_pose(), body_yaw=0.0, duration=duration)
 
@@ -239,7 +274,21 @@ def calibrate_visual_scale(
     for angle in angles_deg:
         mini.goto_target(head=create_head_pose(**{axis: angle}), body_yaw=0.0, duration=duration)
         time.sleep(settle)
-        meas = measure_rotation(ref, _grab(mini), K)
+        try:
+            frame = _grab(mini, after=ref)
+        except RuntimeError as exc:
+            samples.append(
+                {
+                    "angle_deg": angle,
+                    "ok": False,
+                    "dx_px": None,
+                    "dy_px": None,
+                    "inliers": 0,
+                    "error": str(exc),
+                }
+            )
+            continue
+        meas = measure_rotation(ref, frame, K)
         samples.append(
             {
                 "angle_deg": angle,

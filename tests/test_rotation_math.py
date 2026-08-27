@@ -59,3 +59,29 @@ def test_featureless_scene_reports_error_rather_than_a_verdict() -> None:
 
     assert not result["ok"]
     assert result["error"]
+
+
+def test_identical_frames_are_not_reported_as_zero_rotation(monkeypatch):
+    """A stalled stream must raise, not yield a confident 0 degrees.
+
+    Matching a frame against itself gives a perfect homography and a rotation
+    of exactly zero - the most dangerous possible result, since it looks like a
+    clean PASS on a robot that never moved.
+    """
+    from reachy_mini_testbench import rotation_test
+
+    scene = _scene()
+    stuck = type("M", (), {"media": type("Md", (), {"get_frame": lambda self: scene})()})()
+
+    with pytest.raises(RuntimeError, match="stalled"):
+        rotation_test._grab(stuck, after=scene, timeout=0.3, delay=0.01)
+
+
+def test_grab_accepts_a_frame_that_changed():
+    from reachy_mini_testbench import rotation_test
+
+    first = _scene()
+    second = _rotate_head(first, "yaw", 10.0)
+    stuck = type("M", (), {"media": type("Md", (), {"get_frame": lambda self: second})()})()
+
+    assert rotation_test._grab(stuck, after=first, timeout=0.3) is second

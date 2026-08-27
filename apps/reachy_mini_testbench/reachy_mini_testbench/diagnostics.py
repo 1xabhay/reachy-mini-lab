@@ -19,6 +19,7 @@ from dataclasses import asdict
 from typing import Any
 
 import numpy as np
+import requests
 from reachy_mini import ReachyMini
 
 from . import calibration, store
@@ -178,6 +179,31 @@ def check_audio(mini: ReachyMini, seconds: float = 1.5) -> Check:
     )
 
 
+def enable_torque(mini: ReachyMini, client: DaemonClient) -> Check:
+    """Enable motor torque before any motion check, reporting the prior mode.
+
+    A freshly started backend leaves the motors limp, and a limp head tracks
+    nothing - the sweeps would report enormous errors and a confident FAIL that
+    says nothing about calibration.
+    """
+    try:
+        before = client.get("/api/motors/status").get("mode")
+    except requests.RequestException as exc:
+        # The prior mode is advisory; failing to read it must not abort the run.
+        before = f"unknown ({exc})"
+
+    mini.enable_motors()
+    time.sleep(0.5)
+    after = client.get("/api/motors/status").get("mode")
+
+    return Check(
+        name="motor_torque",
+        passed=after == "enabled",
+        detail=f"control mode {before} -> {after}",
+        data={"before": before, "after": after},
+    )
+
+
 def check_storage() -> Check:
     """Make sure there is room to write captures and recordings."""
     free = store.disk_free_mb()
@@ -230,6 +256,14 @@ def run(
 
     with ReachyMini(host=host, port=port, connection_mode="network") as mini:
         checks += [check_joints(mini), check_imu(mini), check_camera(mini), check_audio(mini)]
+
+        if with_motion or with_vision:
+            torque = enable_torque(mini, client)
+            checks.append(torque)
+            if not torque.passed:
+                report["checks"] = [asdict(c) for c in checks]
+                report["passed"] = False
+                return report
 
         if with_motion:
             report["calibration"] = calibration.run_all(mini)

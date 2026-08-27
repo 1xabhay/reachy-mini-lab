@@ -32,12 +32,20 @@ AXES: tuple[Axis, ...] = ("roll", "pitch", "yaw")
 #: quick and stays clear of the Stewart platform's singular corners.
 DEFAULT_AMPLITUDE_DEG = 15.0
 
-#: Tolerances used to turn measurements into PASS/FAIL.
+# Tolerances used to turn measurements into PASS/FAIL.
+#
+# These are NOT vendor specification - Pollen publish no positioning-accuracy
+# figure. They are the numbers you would want from a head that can be pointed
+# open-loop. Measurements from unit 2f102f4682d69822 (see README) sit well
+# outside several of them, so treat a FAIL as "worth understanding", not
+# "return the robot". Retune them for your own unit once you know its baseline;
+# `TOL_REPEAT_DEG` is the one that reflects a genuine fault if exceeded.
 TOL_ZERO_DEG = 2.0
 TOL_ZERO_MM = 3.0
 TOL_RMS_DEG = 2.5
 TOL_GAIN = 0.15  # |gain - 1| must stay under this
 TOL_BACKLASH_DEG = 2.0
+TOL_REPEAT_DEG = 0.5
 
 
 def decompose(pose: np.ndarray) -> dict[str, float]:
@@ -211,6 +219,56 @@ def antenna_check(
     )
 
 
+def repeatability(
+    mini: ReachyMini,
+    axis: Axis = "roll",
+    setpoint: float = 0.0,
+    approach_from: float = DEFAULT_AMPLITUDE_DEG,
+    trials: int = 3,
+    duration: float = 0.8,
+    settle: float = 0.6,
+) -> Check:
+    """Return to one setpoint repeatedly from a fixed direction and measure the spread.
+
+    This is the check that separates a robot which is merely *inaccurate* from
+    one which is *erratic*. A head that lands 4 degrees off but does so within a
+    tenth of a degree every time is correctable with a calibration map;
+    one that scatters is not. Accuracy against the command is deliberately not
+    judged here - `axis_sweep` covers that.
+    """
+    landings: list[float] = []
+    for _ in range(trials):
+        mini.goto_target(
+            head=create_head_pose(**{axis: approach_from}), body_yaw=0.0, duration=duration
+        )
+        time.sleep(settle)
+        mini.goto_target(head=create_head_pose(**{axis: setpoint}), body_yaw=0.0, duration=duration)
+        landings.append(_settled_pose(mini, settle)[axis])
+
+    mini.goto_target(head=create_head_pose(), body_yaw=0.0, duration=duration)
+
+    spread = float(np.max(landings) - np.min(landings))
+    mean = float(np.mean(landings))
+    return Check(
+        name=f"repeatability_{axis}",
+        passed=spread <= TOL_REPEAT_DEG,
+        detail=(
+            f"{trials} approaches from {approach_from:+.1f} deg landed within "
+            f"{spread:.2f} deg of each other (tol {TOL_REPEAT_DEG}), "
+            f"mean {mean:+.2f} vs commanded {setpoint:+.1f}"
+        ),
+        data={
+            "axis": axis,
+            "setpoint_deg": setpoint,
+            "approach_from_deg": approach_from,
+            "landings_deg": landings,
+            "spread_deg": spread,
+            "mean_deg": mean,
+            "offset_from_command_deg": mean - setpoint,
+        },
+    )
+
+
 def run_all(
     mini: ReachyMini,
     axes: tuple[Axis, ...] = AXES,
@@ -222,6 +280,8 @@ def run_all(
     checks: list[Check] = [zero_offset(mini)]
     for axis in axes:
         checks.append(axis_sweep(mini, axis, amplitude_deg=amplitude_deg, steps=steps))
+    if axes:
+        checks.append(repeatability(mini, axis=axes[0], approach_from=amplitude_deg))
     if with_antennas:
         checks.append(antenna_check(mini))
 
