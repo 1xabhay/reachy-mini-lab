@@ -1,4 +1,4 @@
-# reachy-mini
+# reachy-mini-lab
 
 Apps, diagnostics and experiments for a Reachy Mini robot.
 
