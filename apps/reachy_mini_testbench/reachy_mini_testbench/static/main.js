@@ -167,6 +167,15 @@ $("#head-reset").addEventListener("click", () => headSliders.reset());
 $("#antenna-apply").addEventListener("click", (e) =>
   withButton(e.target, () => api("/api/move_antennas", { method: "POST", body: antennaSliders.values() })));
 
+$("#level-head").addEventListener("click", (e) => withButton(e.target, async () => {
+  const r = await api("/api/level_head", { method: "POST" });
+  const a = r.achieved;
+  toast(
+    `Levelled to roll ${a.roll.toFixed(2)}° pitch ${a.pitch.toFixed(2)}° ` +
+    `yaw ${a.yaw.toFixed(2)}° in ${r.iterations} iteration(s)`
+  );
+}));
+
 document.querySelectorAll("[data-post]").forEach((button) => {
   button.addEventListener("click", () =>
     withButton(button, () => api(button.dataset.post, { method: "POST" })));

@@ -97,47 +97,71 @@ curl -s http://reachy-mini.local:8000/api/daemon/status
 
 ## Baseline for unit `2f102f4682d69822`
 
-Measured 2026-08-27, SDK/daemon 1.10.0. Recorded so drift is visible later, and
-because several calibration checks FAIL against the default tolerances — those
-tolerances are our own, not a Pollen specification.
+Measured 2026-08-27, SDK/daemon 1.10.0. Healthy: 9 joints, IMU 9.76 m/s² at rest,
+camera 1280x720 at ~19 fps over WebRTC, mic 16 kHz stereo, control loop 49.7 Hz
+with 0 errors. Antennas track to 0.2° RMS.
 
-Healthy: 9 joints reporting, IMU 9.76 m/s² at rest, camera 1280x720 at ~19 fps
-over WebRTC, mic 16 kHz stereo, control loop 49.6 Hz with 0 errors. Antennas
-track to 0.2° RMS.
+### The head does not return to level, and why
 
-The head does not: it is **precise but not accurate**.
+Commanding neutral leaves the head several degrees off, and **where it lands
+depends entirely on the direction it approached from**:
 
-| Measurement | Value |
+| Approach to a 0° roll command | Lands at |
 | --- | --- |
-| Repeatability (roll, 3 approaches from +15°) | **0.15° spread** |
-| Commanded 0° roll, approached from +15° | lands at **+7.4°** |
-| Commanded 0° roll, approached from −15° | lands at **−3.4°** |
-| Hysteresis, all three head axes | **5–6°** |
-| Yaw gain over ±15° | **0.70** |
-| Commanded +20° yaw, measured by camera | **+16.8°** |
+| from +15° / +20° | **+7 to +14°** |
+| from −15° / −20° | **−3 to −5°** |
 
-Two independent sensors agree on this — the daemon's forward kinematics from the
-motor encoders, and the camera via ORB/RANSAC homography — and the numbers repeat
-to within 0.15° across runs, so it is a real property of the robot rather than a
-measurement artefact. The signature (large, direction-dependent steady-state
-error that settles instantly and never creeps) is what a proportional-only
-position loop does against friction; the SDK ships `pid: [200, 0, 0]` for these
-joints, with no integral term to eliminate the residual.
+That is a friction band roughly 11–17° wide. Inside it, repeating the same
+command does not move the head at all — the error is not noise, and the robot
+repeats to **0.15°** across trials.
 
-Practical consequences:
+The cause is in the shipped configuration, not this unit: all six Stewart
+servos run **P=300, I=0, D=0** (`hardware_config.yaml`). With no integral term,
+each motor stops where the proportional term balances friction and nothing ever
+removes the residual. Both the daemon's forward kinematics and the camera
+(ORB/RANSAC homography) agree on the resulting pose, and it does not drift with
+duty cycle or temperature — 14 cycles held −5.05° ± 0.15° at a flat 44 °C.
 
-- Open-loop head pointing is good to roughly ±5°, no better.
-- Always approach a pose from a consistent direction; the approach changes where
-  the head lands by more than the pose error itself.
-- `zero_offset` reads differently run to run because it inherits wherever the
-  previous test left the head. That variation *is* the hysteresis.
-- Antennas are unaffected and accurate.
+**This is why the head looks crooked after `wake_up()`**: its final gesture is a
++20° roll before returning to neutral, so it always lands on the high side of
+the band.
 
-`repeatability_*` is the check that would indicate a genuine fault if it started
-failing. The accuracy tolerances in
+### The fix
+
+`settle_to_pose()` supplies the missing integral action in software: command,
+measure the residual, fold it back in. Measured end to end:
+
+| | roll |
+| --- | --- |
+| after `wake_up()` | **+10.4°** |
+| after `settle_to_pose()` | **−0.9°** |
+
+It converges in 3–6 iterations and plateaus around 0.7°, which is the band's
+floor — below that a correction is too small to break stiction. Available as
+`POST /api/level_head`, the "Level head" button, and `calibration.level_head()`.
+Use it wherever pose accuracy matters; plain `goto_target` is good to about ±5°.
+
+Two other consequences worth knowing:
+
+- `zero_offset` in the calibration suite reads differently run to run, because
+  it inherits wherever the previous test left the head. That variation *is* the
+  band.
+- Yaw additionally under-delivers (gain ≈ 0.70 over ±15°, and the camera
+  independently measured +16.8° for a commanded +20°). The band explains part of
+  this; the rest is unexplained.
+
+Physical inspection found nothing wrong — no red LEDs, no stiff leg, no detached
+rods, no squeaking — which rules out the assembly and motor faults in Pollen's
+[motors diagnosis guide](https://huggingface.co/docs/reachy_mini/en/troubleshooting/motors_diagnosis).
+For motor-level faults use [Pollen's own testbench app](https://huggingface.co/spaces/pollen-robotics/reachy_mini_testbench),
+which can scan, verify and reflash motors; this one cannot, because those need
+the daemon stopped to take the serial port.
+
+The accuracy tolerances in
 [calibration.py](apps/reachy_mini_testbench/reachy_mini_testbench/calibration.py)
-are a starting point — retune them to this baseline if you want a clean CI signal
-rather than a standing FAIL.
+are ours, not a Pollen specification, and several are tighter than this hardware
+can meet open-loop. `repeatability_*` is the check that would indicate a real
+fault if it started failing.
 
 ## Robot notes
 

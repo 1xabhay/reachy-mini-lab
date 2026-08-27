@@ -82,6 +82,27 @@ def decompose(pose: np.ndarray) -> dict[str, float]:
     }
 
 
+def _goto(
+    mini: ReachyMini,
+    pose: np.ndarray,
+    duration: float,
+    body_yaw: float | None = 0.0,
+) -> bool:
+    """Command a pose, tolerating a missed completion notification.
+
+    The SDK waits only `duration + 1s` for the daemon to acknowledge a goto and
+    raises `TimeoutError` past that, which happens under load even though the
+    move itself succeeds. Every caller here verifies the result by reading the
+    pose back, so a lost acknowledgement is not worth aborting a sweep for.
+    Returns False when the acknowledgement was missed.
+    """
+    try:
+        mini.goto_target(head=pose, body_yaw=body_yaw, duration=duration)
+        return True
+    except TimeoutError:
+        return False
+
+
 def _settled_pose(mini: ReachyMini, settle: float, samples: int = 5) -> dict[str, float]:
     """Wait for the head to settle, then average a few pose readings."""
     time.sleep(settle)
@@ -285,6 +306,125 @@ def repeatability(
     )
 
 
+POSE_KEYS = ("x_mm", "y_mm", "z_mm", "roll", "pitch", "yaw")
+
+
+def _pose_from(components: dict[str, float]) -> np.ndarray:
+    """Build a head pose from the same component names `decompose` returns."""
+    return create_head_pose(
+        x=components["x_mm"],
+        y=components["y_mm"],
+        z=components["z_mm"],
+        roll=components["roll"],
+        pitch=components["pitch"],
+        yaw=components["yaw"],
+        mm=True,
+        degrees=True,
+    )
+
+
+def settle_to_pose(
+    mini: ReachyMini,
+    target: dict[str, float] | None = None,
+    tolerance_deg: float = 1.0,
+    tolerance_mm: float = 1.0,
+    max_iterations: int = 6,
+    gain: float = 0.8,
+    duration: float = 0.6,
+    settle: float = 0.35,
+) -> dict[str, Any]:
+    """Command a head pose, then correct whatever the servos leave behind.
+
+    The Stewart motors are configured P-only (P=300, I=0, D=0 in the SDK's
+    `hardware_config.yaml`), so each one stops where friction balances the
+    proportional term and nothing ever removes the residual. The head therefore
+    settles several degrees from the commanded pose, on whichever side it
+    approached from.
+
+    The robot repeats to a fraction of a degree though, so that residual is not
+    noise - it is a measurable, correctable offset. Measuring it and folding it
+    back into the command supplies, in software and per-pose, the integral
+    action the servo loop does not have. `gain` below 1 keeps the correction
+    from ringing between the two sides of the friction band.
+    """
+    goal = {k: 0.0 for k in POSE_KEYS}
+    if target:
+        unknown = set(target) - set(POSE_KEYS)
+        if unknown:
+            raise ValueError(f"unknown pose components: {sorted(unknown)}")
+        goal.update(target)
+
+    def _residual(error: dict[str, float]) -> tuple[float, float]:
+        return (
+            max(abs(error[k]) for k in AXES),
+            max(abs(error[k]) for k in ("x_mm", "y_mm", "z_mm")),
+        )
+
+    command = dict(goal)
+    history: list[dict[str, Any]] = []
+    best: dict[str, Any] | None = None
+
+    missed_acks = 0
+    for _ in range(max_iterations):
+        if not _goto(mini, _pose_from(command), duration):
+            missed_acks += 1
+        achieved = _settled_pose(mini, settle)
+        error = {k: achieved[k] - goal[k] for k in POSE_KEYS}
+        worst_ang, worst_lin = _residual(error)
+        step = {
+            "command": dict(command),
+            "achieved": dict(achieved),
+            "error": error,
+            "worst_angular_deg": worst_ang,
+            "worst_linear_mm": worst_lin,
+        }
+        history.append(step)
+
+        # Corrections ring inside the friction band rather than converging onto
+        # it, so the last attempt is not reliably the best one - keep the best.
+        if best is None or worst_ang < best["worst_angular_deg"]:
+            best = step
+
+        if worst_ang <= tolerance_deg and worst_lin <= tolerance_mm:
+            break
+
+        # Push the command the other way by most of the observed error.
+        command = {k: command[k] - gain * error[k] for k in POSE_KEYS}
+
+    assert best is not None
+    if history[-1] is not best:
+        # Leave the head at the best pose found, not at the last one tried.
+        _goto(mini, _pose_from(best["command"]), duration)
+        _settled_pose(mini, settle)
+
+    return {
+        "converged": best["worst_angular_deg"] <= tolerance_deg
+        and best["worst_linear_mm"] <= tolerance_mm,
+        "iterations": len(history),
+        "goal": goal,
+        "achieved": best["achieved"],
+        "worst_angular_deg": best["worst_angular_deg"],
+        "worst_linear_mm": best["worst_linear_mm"],
+        "missed_acknowledgements": missed_acks,
+        "history": history,
+    }
+
+
+def level_head(mini: ReachyMini, **kwargs: Any) -> Check:
+    """Drive the head to a genuinely level neutral pose and report the residual."""
+    result = settle_to_pose(mini, **kwargs)
+    return Check(
+        name="level_head",
+        passed=bool(result["converged"]),
+        detail=(
+            f"settled to {result['worst_angular_deg']:.2f} deg / "
+            f"{result['worst_linear_mm']:.2f} mm of neutral "
+            f"in {result['iterations']} iteration(s)"
+        ),
+        data=result,
+    )
+
+
 def range_of_motion(
     mini: ReachyMini,
     axis: Axis = "yaw",
@@ -308,9 +448,7 @@ def range_of_motion(
     min_progress = ROM_MIN_PROGRESS_FRACTION * step_deg
 
     def _go(target: float) -> float:
-        mini.goto_target(
-            head=create_head_pose(**{axis: target}), body_yaw=body_yaw, duration=duration
-        )
+        _goto(mini, create_head_pose(**{axis: target}), duration, body_yaw)
         return _settled_pose(mini, settle)[axis]
 
     directions: dict[str, dict[str, Any]] = {}

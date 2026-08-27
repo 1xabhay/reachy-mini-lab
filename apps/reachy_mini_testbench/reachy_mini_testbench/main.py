@@ -293,6 +293,11 @@ class TestbenchApp(ReachyMiniApp):
             )
             return {"ok": True}
 
+        @api.post("/api/level_head")
+        def level_head() -> dict[str, Any]:
+            """Drive the head to a genuinely level neutral pose."""
+            return exclusive(lambda: calibration.settle_to_pose(reachy_mini))
+
         @api.post("/api/wake_up")
         def wake_up() -> dict[str, Any]:
             exclusive(reachy_mini.wake_up)
