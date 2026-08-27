@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reachy Mini Testbench</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Reachy Mini Testbench</h1>
+  <div id="conn" class="pill pill-idle">connecting…</div>
+</header>
+
+<nav id="tabs">
+  <button class="tab active" data-panel="status">Status</button>
+  <button class="tab" data-panel="movement">Movement</button>
+  <button class="tab" data-panel="camera">Camera</button>
+  <button class="tab" data-panel="audio">Audio</button>
+  <button class="tab" data-panel="tests">Tests</button>
+</nav>
+
+<main>
+  <section id="status" class="panel active">
+    <div class="grid">
+      <div class="card">
+        <h2>Head pose</h2>
+        <table id="pose-table"><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <h2>IMU</h2>
+        <table id="imu-table"><tbody></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Motors <span class="muted" id="motor-count"></span></h2>
+      <table id="motor-table">
+        <thead><tr><th>Motor</th><th>Degrees</th><th>Radians</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="movement" class="panel">
+    <div class="card">
+      <h2>Head</h2>
+      <div id="head-sliders"></div>
+      <div class="row">
+        <button id="head-apply" class="primary">Move head</button>
+        <button id="head-reset">Reset sliders</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Antennas</h2>
+      <div id="antenna-sliders"></div>
+      <button id="antenna-apply" class="primary">Move antennas</button>
+    </div>
+    <div class="card">
+      <h2>Quick actions</h2>
+      <div class="row">
+        <button data-post="/api/go_to_zero">Zero</button>
+        <button data-post="/api/wake_up">Wake up</button>
+        <button data-post="/api/go_to_sleep">Sleep</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="camera" class="panel">
+    <div class="card">
+      <div class="row">
+        <button id="stream-toggle" class="primary">Start stream</button>
+        <button id="capture-save">Save frame</button>
+      </div>
+      <img id="stream" alt="camera stream" hidden>
+      <p id="stream-hint" class="muted">Stream is off.</p>
+    </div>
+    <div class="card">
+      <h2>Captures</h2>
+      <ul id="capture-list" class="files"></ul>
+    </div>
+  </section>
+
+  <section id="audio" class="panel">
+    <div class="card">
+      <div class="row">
+        <button id="record-toggle" class="primary">Start recording</button>
+        <span id="record-timer" class="muted"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Recordings</h2>
+      <ul id="recording-list" class="files"></ul>
+    </div>
+  </section>
+
+  <section id="tests" class="panel">
+    <div class="card">
+      <h2>Calibration sweep</h2>
+      <p class="muted">Sweeps each axis and compares commanded pose against feedback.
+         Reports gain, offset, RMS error and backlash. Moves the robot.</p>
+      <div class="row">
+        <label>Amplitude <input id="cal-amplitude" type="number" value="15" min="5" max="40" step="1"> deg</label>
+        <label>Steps <input id="cal-steps" type="number" value="5" min="3" max="11" step="2"></label>
+        <label class="check"><input id="cal-antennas" type="checkbox" checked> Antennas</label>
+        <button id="cal-run" class="primary">Run calibration</button>
+      </div>
+      <div id="cal-result" class="result"></div>
+    </div>
+
+    <div class="card">
+      <h2>Rotation validation</h2>
+      <p class="muted">Rotates by a known angle and measures the rotation the camera
+         actually saw, via ORB features and a RANSAC homography. Moves the robot.</p>
+      <div class="row">
+        <label>Axis
+          <select id="rot-axis"><option>yaw</option><option>pitch</option><option>roll</option></select>
+        </label>
+        <label>Angle <input id="rot-angle" type="number" value="20" min="-40" max="40" step="1"> deg</label>
+        <label>Tolerance <input id="rot-tol" type="number" value="3" min="0.5" max="15" step="0.5"> deg</label>
+        <button id="rot-run" class="primary">Run test</button>
+      </div>
+      <div id="rot-result" class="result"></div>
+    </div>
+
+    <div class="card">
+      <h2>Visual scale calibration</h2>
+      <p class="muted">Fits pixels-per-degree across several angles to check the published
+         camera intrinsics against reality. Moves the robot.</p>
+      <div class="row">
+        <label>Axis
+          <select id="vs-axis"><option>yaw</option><option>pitch</option></select>
+        </label>
+        <button id="vs-run" class="primary">Fit scale</button>
+      </div>
+      <div id="vs-result" class="result"></div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" hidden></div>
+<script src="/static/main.js"></script>
+</body>
+</html>

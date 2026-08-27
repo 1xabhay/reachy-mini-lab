@@ -1,0 +1,46 @@
+[project]
+name = "reachy-mini-lab"
+version = "0.1.0"
+description = "Apps, diagnostics and experiments for Reachy Mini"
+requires-python = ">=3.12"
+dependencies = [
+    "reachy-mini-testbench",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["apps/*"]
+
+[tool.uv.sources]
+reachy-mini-testbench = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9",
+    "pytest>=8",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "D", "DTZ", "RUF"]
+ignore = [
+    "D203",  # incompatible with D211
+    "D213",  # incompatible with D212
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test stubs and fixtures document themselves at module level; per-member
+# docstrings there are noise.
+"tests/*" = ["D101", "D102", "D103", "D105", "D107"]
+# Camera geometry keeps its conventional notation (K, D, H, A) rather than
+# renaming the maths to satisfy pep8 variable casing.
+"**/rotation_test.py" = ["N803", "N806"]
+"**/test_rotation_math.py" = ["N803", "N806"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
