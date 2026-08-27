@@ -47,6 +47,22 @@ TOL_GAIN = 0.15  # |gain - 1| must stay under this
 TOL_BACKLASH_DEG = 2.0
 TOL_REPEAT_DEG = 0.5
 
+#: Documented head limits, from Pollen's troubleshooting FAQ ("What are the
+#: safety limits (Head & Body)?"): head pitch and roll are +/-40 deg, and head
+#: yaw must stay within 65 deg of body yaw. The daemon silently clamps anything
+#: beyond these, so probing further measures the clamp rather than the robot.
+ROM_LIMIT_DEG: dict[str, float] = {"roll": 40.0, "pitch": 40.0, "yaw": 65.0}
+
+#: A direction is called exhausted once the head stops making at least this
+#: fraction of each commanded step. Two such steps in a row end that sweep.
+ROM_MIN_PROGRESS_FRACTION = 0.25
+
+#: Fraction of the documented limit the head should actually reach.
+TOL_ROM_FRACTION = 0.85
+
+#: Allowed difference between the two directions of one axis.
+TOL_ROM_ASYMMETRY_DEG = 8.0
+
 
 def decompose(pose: np.ndarray) -> dict[str, float]:
     """Split a 4x4 head pose into translation (mm) and roll/pitch/yaw (deg).
@@ -269,12 +285,106 @@ def repeatability(
     )
 
 
+def range_of_motion(
+    mini: ReachyMini,
+    axis: Axis = "yaw",
+    limit_deg: float | None = None,
+    step_deg: float = 5.0,
+    duration: float = 0.5,
+    settle: float = 0.3,
+    body_yaw: float | None = 0.0,
+) -> Check:
+    """Walk one axis out to its limit in both directions and measure what it reaches.
+
+    Range is measured as the span the head *achieves*, not as per-point
+    accuracy, which makes it immune to the constant offset and hysteresis that
+    dominate this robot's pose error. Each direction stops as soon as the head
+    stops making progress, so a mechanically blocked axis is detected instead
+    of being driven into its end stop - Pollen's motor guide warns that a head
+    which cannot move freely makes "the motors force too much and can be
+    damaged".
+    """
+    limit = ROM_LIMIT_DEG[axis] if limit_deg is None else limit_deg
+    min_progress = ROM_MIN_PROGRESS_FRACTION * step_deg
+
+    def _go(target: float) -> float:
+        mini.goto_target(
+            head=create_head_pose(**{axis: target}), body_yaw=body_yaw, duration=duration
+        )
+        return _settled_pose(mini, settle)[axis]
+
+    directions: dict[str, dict[str, Any]] = {}
+    for name, sign in (("positive", 1.0), ("negative", -1.0)):
+        origin = _go(0.0)
+        extreme = origin
+        stalled_at: float | None = None
+        no_progress = 0
+        commanded = 0.0
+
+        while commanded + step_deg <= limit + 1e-9:
+            commanded += step_deg
+            measured = _go(sign * commanded)
+            progress = (measured - extreme) * sign
+            if progress > min_progress:
+                extreme = measured
+                no_progress = 0
+            else:
+                no_progress += 1
+                extreme = measured if progress > 0 else extreme
+                if no_progress >= 2:
+                    stalled_at = commanded
+                    break
+
+        directions[name] = {
+            "commanded_limit_deg": sign * limit,
+            "reached_deg": extreme,
+            "travel_deg": abs(extreme - origin),
+            "stalled_at_deg": None if stalled_at is None else sign * stalled_at,
+        }
+
+    mini.goto_target(head=create_head_pose(), body_yaw=0.0, duration=duration)
+
+    span = directions["positive"]["reached_deg"] - directions["negative"]["reached_deg"]
+    expected_span = 2 * limit
+    coverage = span / expected_span if expected_span else 0.0
+    asymmetry = abs(
+        directions["positive"]["travel_deg"] - directions["negative"]["travel_deg"]
+    )
+    stalled = [n for n, d in directions.items() if d["stalled_at_deg"] is not None]
+
+    passed = coverage >= TOL_ROM_FRACTION and asymmetry <= TOL_ROM_ASYMMETRY_DEG
+    detail = (
+        f"span {span:.1f} deg of {expected_span:.0f} expected ({coverage:.0%}, "
+        f"tol {TOL_ROM_FRACTION:.0%}), reached {directions['negative']['reached_deg']:+.1f} "
+        f"to {directions['positive']['reached_deg']:+.1f}, asymmetry {asymmetry:.1f} deg "
+        f"(tol {TOL_ROM_ASYMMETRY_DEG})"
+    )
+    if stalled:
+        detail += f"; stopped making progress on the {', '.join(stalled)} side"
+
+    return Check(
+        name=f"range_of_motion_{axis}",
+        passed=passed,
+        detail=detail,
+        data={
+            "axis": axis,
+            "limit_deg": limit,
+            "step_deg": step_deg,
+            "span_deg": span,
+            "coverage": coverage,
+            "asymmetry_deg": asymmetry,
+            "directions": directions,
+        },
+    )
+
+
 def run_all(
     mini: ReachyMini,
     axes: tuple[Axis, ...] = AXES,
     amplitude_deg: float = DEFAULT_AMPLITUDE_DEG,
     steps: int = 5,
     with_antennas: bool = True,
+    with_range_of_motion: bool = False,
 ) -> dict[str, Any]:
     """Run the full calibration suite and return a JSON-serialisable report."""
     checks: list[Check] = [zero_offset(mini)]
@@ -282,6 +392,8 @@ def run_all(
         checks.append(axis_sweep(mini, axis, amplitude_deg=amplitude_deg, steps=steps))
     if axes:
         checks.append(repeatability(mini, axis=axes[0], approach_from=amplitude_deg))
+    if with_range_of_motion:
+        checks += [range_of_motion(mini, axis=a) for a in axes]
     if with_antennas:
         checks.append(antenna_check(mini))
 

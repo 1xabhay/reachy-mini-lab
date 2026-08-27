@@ -108,6 +108,20 @@
     </div>
 
     <div class="card">
+      <h2>Range of motion</h2>
+      <p class="muted">Walks each axis out to its documented limit (roll/pitch ±40°,
+         yaw ±65°) and reports the span actually reached. Stops a direction as soon as
+         the head stops making progress, so a blocked axis is not driven into its stop.
+         Moves the robot.</p>
+      <div class="row">
+        <label>Step <input id="rom-step" type="number" value="5" min="1" max="15" step="1"> deg</label>
+        <label>Limit <input id="rom-limit" type="number" placeholder="auto" min="5" max="65" step="5"> deg</label>
+        <button id="rom-run" class="primary">Run sweep</button>
+      </div>
+      <div id="rom-result" class="result"></div>
+    </div>
+
+    <div class="card">
       <h2>Rotation validation</h2>
       <p class="muted">Rotates by a known angle and measures the rotation the camera
          actually saw, via ORB features and a RANSAC homography. Moves the robot.</p>

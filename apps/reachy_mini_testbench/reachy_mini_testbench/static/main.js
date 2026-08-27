@@ -330,6 +330,30 @@ $("#cal-run").addEventListener("click", (e) => withButton(e.target, async () => 
   });
 }));
 
+$("#rom-run").addEventListener("click", (e) => withButton(e.target, async () => {
+  const limit = $("#rom-limit").value;
+  const r = await api("/api/test/range_of_motion", {
+    method: "POST",
+    body: {
+      step: Number($("#rom-step").value),
+      limit: limit === "" ? null : Number(limit),
+    },
+  });
+  const spans = r.checks
+    .map((c) => `${c.data.axis} ${c.data.span_deg.toFixed(0)}°`)
+    .join(" · ");
+  const stalled = r.checks.filter((c) =>
+    Object.values(c.data.directions).some((d) => d.stalled_at_deg !== null));
+  showResult($("#rom-result"), {
+    passed: r.passed,
+    summary: spans,
+    detail: stalled.length
+      ? `stopped early on: ${stalled.map((c) => c.data.axis).join(", ")}`
+      : "every axis reached its documented limit",
+    raw: r,
+  });
+}));
+
 $("#rot-run").addEventListener("click", (e) => withButton(e.target, async () => {
   const r = await api("/api/test/rotation_validation", {
     method: "POST",
@@ -363,10 +387,19 @@ $("#vs-run").addEventListener("click", (e) => withButton(e.target, async () => {
 // ------------------------------------------------------------------ boot
 
 async function loadLastResults() {
-  const [rot, cal] = await Promise.all([
+  const [rot, cal, rom] = await Promise.all([
     api("/api/test/last_rotation_result").catch(() => null),
     api("/api/test/last_calibration_result").catch(() => null),
+    api("/api/test/last_range_of_motion_result").catch(() => null),
   ]);
+  if (rom?.result) {
+    showResult($("#rom-result"), {
+      passed: rom.result.passed,
+      summary: "last run",
+      detail: "",
+      raw: rom.result,
+    });
+  }
   if (rot?.result) {
     showResult($("#rot-result"), {
       passed: Boolean(rot.result.passed),

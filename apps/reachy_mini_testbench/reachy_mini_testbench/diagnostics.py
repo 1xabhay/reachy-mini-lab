@@ -221,6 +221,7 @@ def run(
     with_motion: bool,
     with_vision: bool,
     vision_angle: float,
+    with_rom: bool = False,
 ) -> dict[str, Any]:
     """Run the selected checks and return a JSON-serialisable report."""
     client = DaemonClient(host=host, port=port)
@@ -257,7 +258,7 @@ def run(
     with ReachyMini(host=host, port=port, connection_mode="network") as mini:
         checks += [check_joints(mini), check_imu(mini), check_camera(mini), check_audio(mini)]
 
-        if with_motion or with_vision:
+        if with_motion or with_vision or with_rom:
             torque = enable_torque(mini, client)
             checks.append(torque)
             if not torque.passed:
@@ -265,8 +266,10 @@ def run(
                 report["passed"] = False
                 return report
 
-        if with_motion:
-            report["calibration"] = calibration.run_all(mini)
+        if with_motion or with_rom:
+            report["calibration"] = calibration.run_all(
+                mini, with_range_of_motion=with_rom
+            )
 
         if with_vision:
             report["rotation_validation"] = validate_rotation(
@@ -318,6 +321,11 @@ def main(argv: list[str] | None = None) -> int:
         "--motion", action="store_true", help="run calibration sweeps (MOVES THE ROBOT)"
     )
     parser.add_argument(
+        "--rom",
+        action="store_true",
+        help="sweep each head axis to its documented limit (MOVES THE ROBOT)",
+    )
+    parser.add_argument(
         "--vision",
         action="store_true",
         help="run the camera rotation check (MOVES THE ROBOT)",
@@ -332,7 +340,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quiet", action="store_true", help="only print the overall verdict")
     args = parser.parse_args(argv)
 
-    report = run(args.host, args.port, args.motion, args.vision, args.vision_angle)
+    report = run(
+        args.host, args.port, args.motion, args.vision, args.vision_angle, args.rom
+    )
 
     print(f"Overall: {'PASS' if report['passed'] else 'FAIL'}" if args.quiet else render(report))
 

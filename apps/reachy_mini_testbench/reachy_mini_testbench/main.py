@@ -14,6 +14,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
@@ -29,6 +30,22 @@ from . import calibration, store
 from .rotation_test import calibrate_visual_scale, camera_matrix, validate_rotation
 
 PORT = 8042
+
+#: Order the daemon reports head joints in - `[body_yaw] + stewart_1..6`
+#: (`RobotBackend.get_all_joint_positions` returns `[yaw] + list(dofs)`).
+HEAD_JOINT_NAMES = ("body_rotation", *(f"stewart_{i}" for i in range(1, 7)))
+
+#: Joint angles (rad) that put the head at its neutral pose, from the SDK's
+#: own constant in `ReachyMini.goto_sleep`.
+NEUTRAL_HEAD_JOINTS = (
+    0.0,
+    0.5251518455536499,
+    -0.668710345667336,
+    0.6067086443974802,
+    -0.606711497194891,
+    0.6687148024583701,
+    -0.5251586523105128,
+)
 
 #: Cap on browser-driven motion so a stray slider cannot fling the head.
 MAX_HEAD_ANGLE_DEG = 40.0
@@ -73,6 +90,15 @@ class CalibrationRequest(BaseModel):
     amplitude: float = Field(15.0, ge=5.0, le=MAX_HEAD_ANGLE_DEG)
     steps: int = Field(5, ge=3, le=11)
     antennas: bool = True
+
+
+class RangeOfMotionRequest(BaseModel):
+    """Parameters for a range-of-motion sweep."""
+
+    axes: list[Literal["roll", "pitch", "yaw"]] = ["roll", "pitch", "yaw"]
+    step: float = Field(5.0, ge=1.0, le=15.0)
+    # None means "use the documented limit for this axis".
+    limit: float | None = Field(None, ge=5.0, le=65.0)
 
 
 class VisualScaleRequest(BaseModel):
@@ -167,6 +193,7 @@ class TestbenchApp(ReachyMiniApp):
             "rotation": None,
             "calibration": None,
             "visual_scale": None,
+            "range_of_motion": None,
         }
         latest_frame: dict[str, np.ndarray] = {}
 
@@ -198,15 +225,26 @@ class TestbenchApp(ReachyMiniApp):
         @api.get("/api/motor_status")
         def motor_status() -> dict[str, Any]:
             head, antennas = reachy_mini.get_current_joint_positions()
-            # head is [stewart_1..6, body_rotation]; antennas is [left, right].
-            names = [f"stewart_{i}" for i in range(1, 7)] + ["body_rotation"]
             motors = [
-                {"name": n, "position_rad": float(v), "position_deg": float(np.rad2deg(v))}
-                for n, v in zip(names, head, strict=True)
+                {
+                    "name": name,
+                    "position_rad": float(v),
+                    "position_deg": float(np.rad2deg(v)),
+                    # How far this joint sits from where a neutral head puts it.
+                    # A single leg with a large, persistent delta is the
+                    # signature of a mis-indexed servo horn or a stalling motor.
+                    "delta_from_neutral_deg": float(np.rad2deg(v - z)),
+                }
+                for name, v, z in zip(HEAD_JOINT_NAMES, head, NEUTRAL_HEAD_JOINTS, strict=True)
             ]
             motors += [
-                {"name": n, "position_rad": float(v), "position_deg": float(np.rad2deg(v))}
-                for n, v in zip(("left_antenna", "right_antenna"), antennas, strict=True)
+                {
+                    "name": name,
+                    "position_rad": float(v),
+                    "position_deg": float(np.rad2deg(v)),
+                    "delta_from_neutral_deg": float(np.rad2deg(v)),
+                }
+                for name, v in zip(("left_antenna", "right_antenna"), antennas, strict=True)
             ]
             return {"count": len(motors), "motors": motors}
 
@@ -398,6 +436,28 @@ class TestbenchApp(ReachyMiniApp):
             result = exclusive(go)
             last_results["calibration"] = result
             return result
+
+        @api.post("/api/test/range_of_motion")
+        def run_range_of_motion(req: RangeOfMotionRequest) -> dict[str, Any]:
+            def go() -> dict[str, Any]:
+                checks = [
+                    calibration.range_of_motion(
+                        reachy_mini, axis=axis, limit_deg=req.limit, step_deg=req.step
+                    )
+                    for axis in req.axes
+                ]
+                return {
+                    "passed": all(c.passed for c in checks),
+                    "checks": [asdict(c) for c in checks],
+                }
+
+            result = exclusive(go)
+            last_results["range_of_motion"] = result
+            return result
+
+        @api.get("/api/test/last_range_of_motion_result")
+        def last_range_of_motion_result() -> dict[str, Any]:
+            return {"result": last_results["range_of_motion"]}
 
         @api.get("/api/test/last_calibration_result")
         def last_calibration_result() -> dict[str, Any]:

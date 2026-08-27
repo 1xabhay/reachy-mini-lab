@@ -3,14 +3,16 @@
 import numpy as np
 import pytest
 
+# The daemon returns head joints as [body_yaw] + stewart_1..6, not the other
+# way round - getting this backwards mislabels every motor in the UI.
 EXPECTED_MOTOR_NAMES = [
+    "body_rotation",
     "stewart_1",
     "stewart_2",
     "stewart_3",
     "stewart_4",
     "stewart_5",
     "stewart_6",
-    "body_rotation",
     "left_antenna",
     "right_antenna",
 ]
@@ -126,3 +128,7 @@ def test_missing_file_is_a_404(client):
 def test_last_results_start_empty(client):
     assert client.get("/api/test/last_rotation_result").json()["result"] is None
     assert client.get("/api/test/last_calibration_result").json()["result"] is None
+
+
+def test_range_of_motion_endpoint_is_exposed_and_starts_empty(client):
+    assert client.get("/api/test/last_range_of_motion_result").json()["result"] is None
