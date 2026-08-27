@@ -323,9 +323,21 @@ def _pose_from(components: dict[str, float]) -> np.ndarray:
     )
 
 
+def _present_body_yaw_deg(mini: ReachyMini) -> float:
+    """Present body rotation in degrees.
+
+    Body yaw is a separate degree of freedom and does *not* appear in the head
+    pose, which the daemon reports relative to the body - so it has to be read
+    from the joints, where it is element 0 of the head chain.
+    """
+    head_joints, _ = mini.get_current_joint_positions()
+    return float(np.rad2deg(head_joints[0]))
+
+
 def settle_to_pose(
     mini: ReachyMini,
     target: dict[str, float] | None = None,
+    body_yaw_deg: float | None = 0.0,
     tolerance_deg: float = 1.0,
     tolerance_mm: float = 1.0,
     max_iterations: int = 6,
@@ -355,24 +367,36 @@ def settle_to_pose(
         goal.update(target)
 
     def _residual(error: dict[str, float]) -> tuple[float, float]:
+        angular = [abs(error[k]) for k in AXES]
+        if "body_yaw" in error:
+            angular.append(abs(error["body_yaw"]))
         return (
-            max(abs(error[k]) for k in AXES),
+            max(angular),
             max(abs(error[k]) for k in ("x_mm", "y_mm", "z_mm")),
         )
 
     command = dict(goal)
+    # Body yaw rides alongside the head pose: same P-only problem, but it is a
+    # separate joint and needs its own command and its own correction.
+    body_goal = body_yaw_deg
+    body_command = body_yaw_deg
     history: list[dict[str, Any]] = []
     best: dict[str, Any] | None = None
 
     missed_acks = 0
     for _ in range(max_iterations):
-        if not _goto(mini, _pose_from(command), duration):
+        body_rad = None if body_command is None else float(np.deg2rad(body_command))
+        if not _goto(mini, _pose_from(command), duration, body_rad):
             missed_acks += 1
         achieved = _settled_pose(mini, settle)
         error = {k: achieved[k] - goal[k] for k in POSE_KEYS}
+        if body_goal is not None:
+            achieved = {**achieved, "body_yaw": _present_body_yaw_deg(mini)}
+            error["body_yaw"] = achieved["body_yaw"] - body_goal
         worst_ang, worst_lin = _residual(error)
         step = {
             "command": dict(command),
+            "body_command_deg": body_command,
             "achieved": dict(achieved),
             "error": error,
             "worst_angular_deg": worst_ang,
@@ -390,18 +414,26 @@ def settle_to_pose(
 
         # Push the command the other way by most of the observed error.
         command = {k: command[k] - gain * error[k] for k in POSE_KEYS}
+        if body_command is not None:
+            body_command -= gain * error["body_yaw"]
 
     assert best is not None
     if history[-1] is not best:
         # Leave the head at the best pose found, not at the last one tried.
-        _goto(mini, _pose_from(best["command"]), duration)
+        best_body = best["body_command_deg"]
+        _goto(
+            mini,
+            _pose_from(best["command"]),
+            duration,
+            None if best_body is None else float(np.deg2rad(best_body)),
+        )
         _settled_pose(mini, settle)
 
     return {
         "converged": best["worst_angular_deg"] <= tolerance_deg
         and best["worst_linear_mm"] <= tolerance_mm,
         "iterations": len(history),
-        "goal": goal,
+        "goal": goal if body_goal is None else {**goal, "body_yaw": body_goal},
         "achieved": best["achieved"],
         "worst_angular_deg": best["worst_angular_deg"],
         "worst_linear_mm": best["worst_linear_mm"],

@@ -20,21 +20,35 @@ class StickyHead:
     deg, which is a hardware floor rather than anything this fixture captures.
     """
 
-    def __init__(self, deadband_deg=6.0, start_roll=12.0):
+    def __init__(self, deadband_deg=6.0, start_roll=12.0, body_deadband_deg=0.0):
         self.deadband = deadband_deg
+        self.body_deadband = body_deadband_deg
         self.roll = start_roll
+        self.body_yaw = 0.0
 
-    def goto_target(self, head=None, antennas=None, duration=0.5, **kw):
+    @staticmethod
+    def _stick(current, commanded, band):
+        delta = commanded - current
+        if abs(delta) <= band:
+            return current
+        # Travels most of the way, stopping a band short of the goal.
+        return commanded - np.sign(delta) * band
+
+    def goto_target(self, head=None, antennas=None, duration=0.5, body_yaw=None, **kw):
         commanded = float(Rotation.from_matrix(head[:3, :3]).as_euler("xyz", degrees=True)[0])
-        delta = commanded - self.roll
-        if abs(delta) > self.deadband:
-            # Travels most of the way, stopping a band short of the goal.
-            self.roll = commanded - np.sign(delta) * self.deadband
+        self.roll = self._stick(self.roll, commanded, self.deadband)
+        if body_yaw is not None:
+            self.body_yaw = self._stick(
+                self.body_yaw, float(np.rad2deg(body_yaw)), self.body_deadband
+            )
 
     def get_current_head_pose(self):
         pose = np.eye(4)
         pose[:3, :3] = Rotation.from_euler("xyz", [self.roll, 0, 0], degrees=True).as_matrix()
         return pose
+
+    def get_current_joint_positions(self):
+        return [float(np.deg2rad(self.body_yaw))] + [0.0] * 6, [0.0, 0.0]
 
 
 class DriftingHead:
@@ -50,9 +64,12 @@ class DriftingHead:
         self.drift = drift_per_call
         self.calls = 0
 
-    def goto_target(self, head=None, antennas=None, duration=0.5, **kw):
+    def goto_target(self, head=None, antennas=None, duration=0.5, body_yaw=None, **kw):
         self.calls += 1
         self.roll = self.calls * self.drift
+
+    def get_current_joint_positions(self):
+        return [0.0] * 7, [0.0, 0.0]
 
     def get_current_head_pose(self):
         pose = np.eye(4)
@@ -133,3 +150,26 @@ def test_a_missed_completion_acknowledgement_does_not_abort_the_correction():
 
     assert result["missed_acknowledgements"] == 1
     assert result["converged"]
+
+
+def test_body_yaw_is_corrected_too():
+    """Body rotation is a separate joint with the same P-only shortfall.
+
+    It does not appear in the head pose, so it needs reading and correcting
+    on its own - and it lags badly open-loop (commanded 20 deg reached 13.5).
+    """
+    head = StickyHead(deadband_deg=0.0, start_roll=0.0, body_deadband_deg=6.0)
+
+    result = settle_to_pose(head, body_yaw_deg=20.0, tolerance_deg=1.0, max_iterations=8)
+
+    assert result["goal"]["body_yaw"] == 20.0
+    assert abs(result["achieved"]["body_yaw"] - 20.0) < 6.0, "must beat the raw deadband"
+
+
+def test_body_yaw_can_be_left_alone():
+    head = StickyHead(deadband_deg=6.0, start_roll=12.0)
+
+    result = settle_to_pose(head, body_yaw_deg=None, tolerance_deg=1.0)
+
+    assert "body_yaw" not in result["goal"]
+    assert "body_yaw" not in result["history"][-1]["error"]

@@ -16,8 +16,13 @@ uv sync
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `REACHY_MINI_HOST` | `reachy-mini.local` | Daemon hostname or IP |
+
 | `REACHY_MINI_PORT` | `8000` | Daemon port |
 | `TESTBENCH_DATA_DIR` | `/tmp/reachy_mini_testbench` | Where captures and recordings are written |
+
+`reachy-mini.local` resolves intermittently on some networks — a
+[known mDNS issue](https://huggingface.co/docs/reachy_mini/en/troubleshooting).
+Set `REACHY_MINI_HOST` to the robot's IP if it drops.
 
 The robot must be powered on, on the same network, and its **motor backend
 started** before anything can reach the motors. `reachy-diag` says so explicitly
@@ -146,9 +151,21 @@ Two other consequences worth knowing:
 - `zero_offset` in the calibration suite reads differently run to run, because
   it inherits wherever the previous test left the head. That variation *is* the
   band.
-- Yaw additionally under-delivers (gain ≈ 0.70 over ±15°, and the camera
-  independently measured +16.8° for a commanded +20°). The band explains part of
-  this; the rest is unexplained.
+- **Head yaw is not a separate problem.** The gain of ≈0.70 over ±15° was the
+  friction band and nothing else: with closed-loop settling the Stewart platform
+  hits every yaw target from 5° to 30° to within 0.85°. No saturation, no
+  shortfall.
+- **Body rotation has the same P-only shortfall**, and it is worse — around 25%
+  open-loop. It is a separate joint that does *not* appear in the head pose
+  (which the daemon reports relative to the body), so it has to be read from
+  joint 0 and corrected on its own. `settle_to_pose` now does.
+
+  | Commanded body yaw | Open loop | Corrected |
+  | --- | --- | --- |
+  | +10° | +6.2° | **+9.3°** |
+  | +20° | +14.8° | **+20.9°** |
+  | −20° | −14.8° | **−20.0°** |
+  | +30° | +23.5° | **+31.3°** |
 
 Physical inspection found nothing wrong — no red LEDs, no stiff leg, no detached
 rods, no squeaking — which rules out the assembly and motor faults in Pollen's
