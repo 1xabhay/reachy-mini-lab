@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reachy Mini Pet</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <h1><span aria-hidden="true">🐣</span> Reachy Mini Pet</h1>
+      <p class="lead">
+        An always-on desk pet. It follows you round the room, listens, answers
+        out loud, and reacts with its body. Nothing leaves your machine.
+      </p>
+
+      <p class="note">
+        Install it from the Reachy Mini dashboard, or read the
+        <a href="https://github.com/pollen-robotics/reachy_mini">SDK docs</a> to
+        build on it.
+      </p>
+
+      <h2>Six layers, one job each</h2>
+      <p>
+        Each layer announces what it observes on a bus and knows nothing about
+        the others, so any one runs alone and any combination runs together.
+        Vision on its own is a robot that watches you; add hearing and it knows
+        when it is spoken to; add a mind and it answers.
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>Layer</th><th>On its own</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Vision</td><td>follows you round the room</td></tr>
+          <tr><td>Hearing</td><td>knows when it is spoken to</td></tr>
+          <tr><td>Transcriber</td><td>turns sound into words</td></tr>
+          <tr><td>Mind</td><td>turns words into a reply and a feeling</td></tr>
+          <tr><td>Voice</td><td>speaks</td></tr>
+          <tr><td>Body</td><td>body language, from 85 recorded moves</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Everything runs here</h2>
+      <table>
+        <thead>
+          <tr><th>Stage</th><th>What</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Voice detection</td><td>silero-vad (ONNX, ~2 MB)</td></tr>
+          <tr><td>Speech to text</td><td>faster-whisper, on the CPU</td></tr>
+          <tr><td>Mind</td><td>any local model, served by Ollama</td></tr>
+          <tr><td>Voice</td><td>piper, streamed in chunks</td></tr>
+        </tbody>
+      </table>
+
+      <p class="note">
+        No API keys. No audio leaves the room.
+      </p>
+    </main>
+  </body>
+</html>
