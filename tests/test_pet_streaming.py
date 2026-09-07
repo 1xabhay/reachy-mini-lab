@@ -189,7 +189,7 @@ def test_the_emotion_comes_off_the_front():
     emotion, rest = take_emotion(drip("EMOTION: cheerful1\nHello there. "), ALLOWED)
 
     assert emotion == "cheerful1"
-    assert "".join(rest) == "Hello there. "
+    assert rest.strip() == "Hello there."
 
 
 def test_the_speech_after_it_still_streams_as_clauses():
@@ -197,7 +197,7 @@ def test_the_speech_after_it_still_streams_as_clauses():
     emotion, rest = take_emotion(drip("EMOTION: sad1\nOh no. That's awful. "), ALLOWED)
 
     assert emotion == "sad1"
-    assert list(sentences(rest)) == ["Oh no.", "That's awful."]
+    assert list(sentences([rest])) == ["Oh no.", "That's awful."]
 
 
 def test_an_emotion_it_does_not_have_is_refused():
@@ -205,7 +205,7 @@ def test_an_emotion_it_does_not_have_is_refused():
     emotion, rest = take_emotion(drip("EMOTION: jubilant7\nHello. "), ALLOWED)
 
     assert emotion == ""
-    assert "".join(rest) == "Hello. "
+    assert rest.strip() == "Hello."
 
 
 def test_a_reply_with_no_emotion_line_keeps_all_its_words():
@@ -213,7 +213,7 @@ def test_a_reply_with_no_emotion_line_keeps_all_its_words():
     emotion, rest = take_emotion(drip("Hello there, how are you doing today? "), ALLOWED)
 
     assert emotion == ""
-    assert "Hello there" in "".join(rest)
+    assert "Hello there" in rest
 
 
 def test_a_long_first_line_is_not_mistaken_for_an_emotion():
@@ -222,7 +222,7 @@ def test_a_long_first_line_is_not_mistaken_for_an_emotion():
     emotion, rest = take_emotion(drip(long_reply), ALLOWED)
 
     assert emotion == ""
-    assert "".join(rest).startswith("I was thinking")
+    assert rest.startswith("I was thinking")
 
 
 def test_it_is_not_fussy_about_the_format():
@@ -236,14 +236,14 @@ def test_an_empty_stream_is_harmless():
     emotion, rest = take_emotion([], ALLOWED)
 
     assert emotion == ""
-    assert "".join(rest) == ""
+    assert rest == ""
 
 
 def test_nothing_is_lost_when_the_emotion_line_is_absent():
     text = "Just talking. And more talking. "
     _, rest = take_emotion(drip(text), ALLOWED)
 
-    assert "".join(rest) == text
+    assert rest.split() == text.split()
 
 
 # ------------------------------------------------------- a spoken-length budget
@@ -278,3 +278,62 @@ def test_the_first_clause_is_always_said():
 
 def test_nothing_in_means_nothing_out():
     assert clamp_clauses([], budget=100) == []
+
+
+# ------------------------------------- surviving whatever the model emits
+
+# A bake-off across four local models found the emotion format was far too
+# fragile. `qwen3:1.7b` is a reasoning model and spends its whole token budget
+# inside <think> tags, so the pet got empty replies. `gemma3:1b` put the
+# EMOTION line at the *end* and echoed the template placeholder verbatim.
+#
+# Being strict here costs nothing and gains the small models, which is the
+# whole game on edge hardware - so parse what models actually produce.
+
+
+def test_a_reasoning_models_thoughts_are_not_spoken():
+    """qwen3 and friends think out loud in tags. That is not the reply."""
+    stream = drip(
+        "<think>The user greeted me, I should be warm.</think>\n"
+        "EMOTION: cheerful1\nMorning! "
+    )
+    emotion, rest = take_emotion(stream, ALLOWED)
+
+    assert emotion == "cheerful1"
+    assert "think" not in rest.lower()
+    assert "Morning!" in rest
+
+
+def test_thinking_that_never_closes_is_still_dropped():
+    """A truncated reply can leave the tag open. Do not speak the thoughts."""
+    emotion, rest = take_emotion(drip("<think>I am not sure what to"), ALLOWED)
+
+    assert emotion == ""
+    assert rest == ""
+
+
+def test_an_emotion_named_at_the_end_is_still_found():
+    """gemma3 puts it last as often as first."""
+    emotion, rest = take_emotion(drip("Sorry about that. EMOTION: sad1"), ALLOWED)
+
+    assert emotion == "sad1"
+    assert "EMOTION" not in rest
+    assert "Sorry about that." in rest
+
+
+def test_the_template_placeholder_is_never_spoken():
+    """Small models echo the instructions back verbatim."""
+    stream = drip("EMOTION: sad1\n<what to say out loud> I'm sorry to hear that. ")
+    _, rest = take_emotion(stream, ALLOWED)
+    said = " ".join(sentences([rest]))
+
+    assert "<" not in said and ">" not in said
+    assert "I'm sorry to hear that." in said
+
+
+def test_a_plain_reply_is_untouched():
+    """The common case must not be damaged by any of the above."""
+    emotion, rest = take_emotion(drip("EMOTION: cheerful1\nHello there. "), ALLOWED)
+
+    assert emotion == "cheerful1"
+    assert rest.strip() == "Hello there."

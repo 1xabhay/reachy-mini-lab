@@ -38,6 +38,8 @@ reachy-mini-pet = "reachy_mini_pet.main:ReachyMiniPet"
 
 [project.scripts]
 reachy-pet = "reachy_mini_pet.main:main"
+# Measure a language model against what this pet asks of one, on your hardware.
+reachy-pet-bench = "reachy_mini_pet.bench:main"
 
 [tool.setuptools]
 package-dir = { "" = "." }

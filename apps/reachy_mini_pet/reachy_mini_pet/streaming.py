@@ -14,7 +14,6 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from itertools import chain
 
 #: A clause ends at punctuation followed by space, or at a newline. There is
 #: deliberately no "end of buffer" case: mid-stream the buffer ends in the
@@ -46,6 +45,24 @@ _ABBREVIATIONS = frozenset(
         "ltd",
     ]
 )
+
+#: Reasoning models think out loud in tags and spend most of their tokens
+#: there. None of it is the reply, and none of it should be said aloud.
+_THINKING = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_THINKING_OPEN = re.compile(r"<think>", re.IGNORECASE)
+
+#: Small models echo the instruction template back verbatim, placeholder
+#: brackets and all: "<what to say out loud> I'm sorry to hear that."
+_PLACEHOLDER = re.compile(r"<[^<>]{0,60}>")
+
+#: A labelled emotion, wherever it lands. Asking for it on the first line works
+#: on capable models; smaller ones put it last, or trailing a sentence.
+_EMOTION_LABELLED = re.compile(r"emotion[ \t]*:[ \t]*([a-z0-9_-]+)", re.IGNORECASE)
+
+#: A bare move name alone on a line, for models that drop the label entirely.
+#: Only trusted when the name is one the robot actually has, since otherwise
+#: this would eat any one-word sentence.
+_EMOTION_BARE = re.compile(r"^[ \t]*([a-z0-9_-]+)[ \t]*$", re.IGNORECASE | re.MULTILINE)
 
 #: Trailing characters that belong to the sentence they follow.
 _TRAILING = "\"')]} \t\n"
@@ -151,49 +168,61 @@ class FaceMemory:
         return self.confidence(now) > 0.0
 
 
-#: How far to read looking for an emotion line before concluding there is not
-#: one. Long enough for any move name, short enough not to swallow a sentence.
-_EMOTION_LOOKAHEAD = 60
+def clean_reply(text: str) -> str:
+    """Strip everything a model emits that was never meant to be spoken.
 
-_EMOTION_LINE = re.compile(r"^\s*(emotion\s*:)?\s*([a-z0-9_\-]+)\s*$", re.IGNORECASE)
+    Reasoning traces and echoed template placeholders both turn up often enough
+    that leaving them in means the pet reads its own instructions out loud.
+    """
+    without_thoughts = _THINKING.sub(" ", text)
+    # An unclosed tag means the reply was cut off mid-thought, so everything
+    # from the tag onwards is thinking rather than speech.
+    opened = _THINKING_OPEN.search(without_thoughts)
+    if opened:
+        without_thoughts = without_thoughts[: opened.start()]
+    return _PLACEHOLDER.sub(" ", without_thoughts)
 
 
-def take_emotion(tokens: Iterable[str], allowed: Iterable[str]) -> tuple[str, Iterator[str]]:
-    """Split a leading emotion line off a token stream.
+def take_emotion(tokens: Iterable[str], allowed: Iterable[str]) -> tuple[str, str]:
+    """Split the emotion the model named off the rest of what it said.
 
     The model is asked to name how it feels on the first line and then speak.
-    That keeps one request and keeps the speech streaming - asking for JSON
-    instead would mean parsing the whole reply before a word could be said -
-    and it makes the body move before the voice starts, which is the order a
-    living thing does it in.
+    Capable models do exactly that; smaller ones put the line last, or in the
+    middle, or wrap the whole reply in reasoning tags. Since the emotion can be
+    anywhere, the reply is read whole before it is split.
 
-    Returns the emotion (empty if there was not a recognisable one) and the
-    rest of the stream, with nothing dropped either way.
+    That gives up speaking the first clause while the rest is still generating,
+    which measured at about 200 ms on replies this short - a fair price for
+    working with the small models, which is the whole game on edge hardware.
+
+    Returns the emotion (empty if it did not name a real one) and the speech as
+    a plain string, with the emotion line and anything unspeakable removed. A
+    string rather than an iterator on purpose: the old one-shot iterator could
+    only be read once, which is a trap for both callers and tests.
     """
-    permitted = set(allowed)
-    stream = iter(tokens)
-    buffer = ""
+    permitted = {name.lower() for name in allowed}
+    whole = clean_reply("".join(tokens))
 
-    for token in stream:
-        buffer += token
-        if "\n" in buffer:
-            head, _, rest = buffer.partition("\n")
-            match = _EMOTION_LINE.match(head)
-            if match:
-                declared, name = match.group(1), match.group(2).lower()
-                if name in permitted:
-                    return name, chain([rest], stream)
-                if declared:
-                    # It meant to name a feeling and got the name wrong. Drop
-                    # the line - saying "EMOTION: jubilant7" out loud is worse
-                    # than losing it.
-                    return "", chain([rest], stream)
-            # Not an emotion line after all - hand every word back.
-            return "", chain([buffer], stream)
-        if len(buffer) >= _EMOTION_LOOKAHEAD:
-            return "", chain([buffer], stream)
+    emotion = ""
+    for match in _EMOTION_LABELLED.finditer(whole):
+        if match.group(1).lower() in permitted:
+            emotion = match.group(1).lower()
+            break
 
-    return "", iter([buffer])
+    # Every labelled emotion goes, named correctly or not: "EMOTION: jubilant7"
+    # read aloud is worse than losing it.
+    speech = _EMOTION_LABELLED.sub(" ", whole)
+
+    if not emotion:
+        # No label at all. A lone move name on its own line is the model
+        # answering in the right spirit with the wrong syntax.
+        for match in _EMOTION_BARE.finditer(speech):
+            if match.group(1).lower() in permitted:
+                emotion = match.group(1).lower()
+                speech = speech[: match.start()] + " " + speech[match.end() :]
+                break
+
+    return emotion, speech.strip()
 
 
 #: Roughly how much speech the pet may commit to in one reply, in characters.

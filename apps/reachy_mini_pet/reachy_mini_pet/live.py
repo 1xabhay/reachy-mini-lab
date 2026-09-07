@@ -43,7 +43,11 @@ DATA = Path(os.environ.get("REACHY_PET_DATA_DIR", "~/.reachy_pet")).expanduser()
 VAD_MODEL = DATA / "silero_vad.onnx"
 PIPER_VOICE = DATA / "voices" / os.environ.get("REACHY_PET_VOICE", "en_GB-jenny_dioco-medium.onnx")
 WHISPER_SIZE = os.environ.get("REACHY_PET_WHISPER", "base.en")
-OLLAMA_MODEL = os.environ.get("REACHY_PET_LLM", "qwen2.5:7b")
+# Chosen by measurement, not by size - see `reachy-pet-bench`. Against the
+# pet's own prompts this named a valid emotion 8/8 where qwen2.5:7b managed
+# 6/8, replied three times faster (0.23s vs 0.69s) and used 1.9 GB instead of
+# 4.7 GB. A pet says one or two short sentences; a 7B is not paying for itself.
+OLLAMA_MODEL = os.environ.get("REACHY_PET_LLM", "qwen3:1.7b")
 OLLAMA_URL = os.environ.get("REACHY_PET_OLLAMA", "http://localhost:11434/api/chat")
 
 #: Body language the pet can choose from, out of the 85 recorded moves. Curated
@@ -315,7 +319,17 @@ def local_transcriber(size: str = WHISPER_SIZE):
 
 
 def local_mind(model: str = OLLAMA_MODEL, emotions: tuple[str, ...] = EMOTIONS):
-    """Build a think function backed by a language model on this machine."""
+    """Build a think function backed by a language model on this machine.
+
+    A pet wants a fast, short, in-character answer, which is close to the
+    opposite of what a reasoning model does. Asked to reason, `qwen3:1.7b`
+    spent its entire token budget inside `<think>` tags and returned nothing
+    at all, so thinking is switched off where the server supports it - which
+    also made it five times faster.
+    """
+    # Not every Ollama build, and not every model, accepts `think`: a model
+    # that cannot reason returns 400 for it. Ask once, remember the answer.
+    no_thinking = {"supported": True}
 
     def stream(messages):
         body = {
@@ -323,14 +337,34 @@ def local_mind(model: str = OLLAMA_MODEL, emotions: tuple[str, ...] = EMOTIONS):
             "stream": True,
             "messages": messages,
             "keep_alive": "1h",  # an always-on pet must not pay a cold start
-            "options": {"temperature": 0.7, "num_predict": 120},
+            "options": {"temperature": 0.7, "num_predict": 200},
         }
+        if no_thinking["supported"]:
+            body["think"] = False
+
         request = urllib.request.Request(
             OLLAMA_URL,
             data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(request, timeout=120) as response:
+        try:
+            response = urllib.request.urlopen(request, timeout=120)
+        except urllib.error.HTTPError as error:
+            if error.code != 400 or not no_thinking["supported"]:
+                raise
+            # This model or server does not know about `think`. Drop it and
+            # carry on; the reasoning traces get stripped later anyway.
+            logger.info("%s does not accept think=false; leaving it on", model)
+            no_thinking["supported"] = False
+            body.pop("think")
+            request = urllib.request.Request(
+                OLLAMA_URL,
+                data=json.dumps(body).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            response = urllib.request.urlopen(request, timeout=120)
+
+        with response:
             for line in response:
                 if not line.strip():
                     continue
@@ -348,7 +382,7 @@ def local_mind(model: str = OLLAMA_MODEL, emotions: tuple[str, ...] = EMOTIONS):
             {"role": "user", "content": text},
         ]
         feeling, speech = take_emotion(stream(messages), emotions or EMOTIONS)
-        return clamp_clauses(sentences(speech)), feeling
+        return clamp_clauses(sentences([speech])), feeling
 
     return think
 
