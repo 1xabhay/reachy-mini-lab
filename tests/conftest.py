@@ -129,3 +129,117 @@ def client(robot: FakeMini, tmp_path, monkeypatch) -> TestClient:
 
     stop_event.set()
     worker.join(timeout=5.0)
+
+
+# --------------------------------------------------------------------------
+# Desk pet fixtures
+#
+# The pet reaches the outside world through four seams - the mic/speaker, the
+# HuggingFace inference client, the Anthropic client, and the emotions library.
+# Each gets a stub that records what it was asked to do, so a whole
+# conversation can be played through the real loop with nothing plugged in.
+# --------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from reachy_mini_pet import live  # noqa: E402
+
+
+class FakePetMedia:
+    """A mic playing a scripted timeline, and a speaker that remembers what it played.
+
+    A `None` in the script means "the mic buffer is empty right now", which is
+    what the real `get_audio_sample` returns between callbacks. The pet relies
+    on that to know when it has finished discarding its own echo, so the stub
+    has to reproduce it rather than handing back frames forever.
+    """
+
+    def __init__(self, script=None, samplerate=16000, stop_event=None, idle_polls=0):
+        self.script = list(script or [])
+        self.samplerate = samplerate
+        self.stop_event = stop_event
+        self.idle_polls = idle_polls
+        self.recording = False
+        self.played: list[str] = []
+        self.polls = 0
+        self.exhausted_polls = 0
+
+    def start_recording(self) -> None:
+        self.recording = True
+
+    def stop_recording(self) -> None:
+        self.recording = False
+
+    def get_input_audio_samplerate(self) -> int:
+        return self.samplerate
+
+    def get_audio_sample(self):
+        self.polls += 1
+        if self.script:
+            return self.script.pop(0)
+        # Script over: idle for a while so the face/doze logic gets a turn,
+        # then let the app's loop finish.
+        self.exhausted_polls += 1
+        if self.stop_event is not None and self.exhausted_polls > self.idle_polls:
+            self.stop_event.set()
+        return None
+
+    def play_sound(self, path: str) -> None:
+        self.played.append(path)
+
+
+class FakePetMini:
+    """Stands in for `ReachyMini`, recording every call in order."""
+
+    def __init__(self, media=None):
+        self.media = media if media is not None else FakePetMedia()
+        self.calls: list[tuple[str, Any]] = []
+        self.face_detected = False
+        self.moves_played: list[str] = []
+
+    def _record(self, name: str, payload: Any = None) -> None:
+        self.calls.append((name, payload))
+
+    def names(self) -> list[str]:
+        """Just the call names, for asserting on ordering."""
+        return [name for name, _ in self.calls]
+
+    def wake_up(self) -> None:
+        self._record("wake_up")
+
+    def goto_sleep(self) -> None:
+        self._record("goto_sleep")
+
+    def enable_wobbling(self) -> None:
+        self._record("enable_wobbling")
+
+    def disable_wobbling(self) -> None:
+        self._record("disable_wobbling")
+
+    def start_head_tracking(self, weight: float = 1.0) -> None:
+        self._record("start_head_tracking", weight)
+
+    def stop_head_tracking(self) -> None:
+        self._record("stop_head_tracking")
+
+    def get_tracked_face(self, wait: bool = True, timeout: float = 5.0):
+        return SimpleNamespace(detected=self.face_detected)
+
+    def play_move(self, move, sound: bool = True) -> None:
+        self._record("play_move", (move.name, sound))
+        self.moves_played.append(move.name)
+
+
+class FakeMoves:
+    """Stands in for the recorded emotions library."""
+
+    def __init__(self, names=None):
+        self.names = list(names if names is not None else live.EMOTIONS)
+
+    def list_moves(self) -> list[str]:
+        return list(self.names)
+
+    def get(self, name: str):
+        if name not in self.names:
+            raise ValueError(f"Move {name} not found")
+        return SimpleNamespace(name=name)

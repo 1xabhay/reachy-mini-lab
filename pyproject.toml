@@ -5,6 +5,7 @@ description = "Apps, diagnostics and experiments for Reachy Mini"
 requires-python = ">=3.12"
 dependencies = [
     "reachy-mini-testbench",
+    "reachy-mini-pet",
 ]
 
 [tool.uv]
@@ -15,11 +16,16 @@ members = ["apps/*"]
 
 [tool.uv.sources]
 reachy-mini-testbench = { workspace = true }
+reachy-mini-pet = { workspace = true }
 
 [dependency-groups]
 dev = [
     "ruff>=0.9",
     "pytest>=8",
+    "pytest-cov>=5",
+    "hypothesis>=6",
+    "piper-tts>=1.8.0",
+    "faster-whisper>=1.2.1",
 ]
 
 [tool.ruff]
@@ -44,3 +50,9 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["if __name__ == .__main__.:"]

@@ -62,6 +62,23 @@ reachy-mini app run reachy_mini_testbench
 See [apps/reachy_mini_testbench/README.md](apps/reachy_mini_testbench/README.md)
 for the API surface and what each check measures.
 
+## Desk pet
+
+An always-on pet: it follows you around the room, listens, answers out loud, and
+reacts with recorded body language. Everything runs locally - no API keys, and
+no audio leaves the machine.
+
+```sh
+uv run reachy-pet
+```
+
+It needs three model files on first run (a 2 MB voice detector, a piper voice,
+and an Ollama model). See
+[apps/reachy_mini_pet/README.md](apps/reachy_mini_pet/README.md) for those, the
+tuning knobs, and what it deliberately does not do yet;
+[CONTRIBUTING.md](apps/reachy_mini_pet/CONTRIBUTING.md) for how to add a layer
+or swap a model.
+
 ## Layout
 
 ```

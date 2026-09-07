@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reachy-mini-pet"
+version = "0.1.0"
+description = "An always-on desk pet for Reachy Mini: watches you, listens, answers - entirely on your own machine"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["reachy-mini-app"]
+dependencies = [
+    "reachy-mini>=1.10.0",
+    "numpy>=2.2.5",
+    # Voice activity detection. The Silero model is a ~2 MB ONNX file the app
+    # downloads on first run; onnxruntime is already needed by the SDK's own
+    # face detection, so this adds nothing.
+    "onnxruntime>=1.16",
+    # Speech to text, on the CPU.
+    "faster-whisper>=1.2",
+    # Text to speech, on the CPU.
+    "piper-tts>=1.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "hypothesis>=6",
+    "ruff>=0.9",
+    "scipy>=1.11",
+]
+
+[project.entry-points."reachy_mini_apps"]
+# The key must be the project name exactly, dashes and all - that is what
+# `reachy-mini-app-assistant check` looks for.
+reachy-mini-pet = "reachy_mini_pet.main:ReachyMiniPet"
+
+[project.scripts]
+reachy-pet = "reachy_mini_pet.main:main"
+
+[tool.setuptools]
+package-dir = { "" = "." }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+reachy_mini_pet = ["**/*"]
