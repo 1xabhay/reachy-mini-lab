@@ -27,6 +27,7 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
+    StartFrame,
     TranscriptionFrame,
     TTSSpeakFrame,
     TTSTextFrame,
@@ -53,6 +54,8 @@ RECENT_REPLIES = 5
 VOICE_WAIT_S = 10.0
 #: Run states after which a turn will never deliver a reply.
 _ENDED = ("failed", "cancelled", "unknown")
+#: How the kernel's own turns (greetings, nudges) are named (protocol v1 §9).
+KERNEL_TURN = "kernel-"
 
 
 class Playback:
@@ -125,6 +128,7 @@ class _Turn:
     reply_text: str | None = None  # the final reply, once delivered
     reported: bool = False
     streamed: bool = False
+    ended: bool = False  # played and reported, or never admitted
     emotes: dict[int, asyncio.Task] = field(default_factory=dict)
     speech: SpeechStream = field(default_factory=lambda: SpeechStream((*TOOLS, *EMOTIONS)))
 
@@ -153,7 +157,9 @@ class SageProcessor(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Route speech, playback and interruptions; pass every frame on."""
         await super().process_frame(frame, direction)
-        if isinstance(frame, VADUserStoppedSpeakingFrame):
+        if isinstance(frame, StartFrame):
+            self._task = self.create_task(self._listen())
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
             # The VAD decides stop_secs after the person actually stopped.
             self._speech_ended = self._now() - frame.stop_secs
         elif isinstance(frame, TranscriptionFrame) and not is_self_echo(frame.text, self._recent):
@@ -168,6 +174,7 @@ class SageProcessor(FrameProcessor):
             self._audio_done.set()
         elif isinstance(frame, InterruptionFrame):
             await self._interrupt()
+            self._task = self.create_task(self._listen())  # the kernel may still speak first
         await self.push_frame(frame, direction)
 
     async def cleanup(self):
@@ -182,7 +189,7 @@ class SageProcessor(FrameProcessor):
 
     async def _submit(self, heard: str) -> None:
         turn = self._turn
-        running = turn is not None and self._task is not None and not self._task.done()
+        running = turn is not None and not turn.ended
         if running and turn.reply_seq is None and not turn.streamed:
             # Still thinking: the kernel forgets a turn stopped before its reply,
             # so its words lead the one that replaces it, as one message.
@@ -198,31 +205,56 @@ class SageProcessor(FrameProcessor):
         self._task = self.create_task(self._converse(heard, timing))
 
     async def _converse(self, heard: str, timing: dict) -> None:
+        """Take one turn of the person's, then listen for the kernel's own."""
         turn = self._turn = _Turn("reachy-" + uuid.uuid4().hex, heard)
         self._audio_done.clear()
         try:
             admitted = await self._session.start(turn.turn_id, heard, timing)
         except KernelUnavailableError as error:
             logger.warning("kernel unreachable: %s", error)
+            admitted = None
             await self._say(OFFLINE_LINE)
-            return
         if admitted == "busy":
             await self._say(BUSY_LINE)
-        if admitted != "admitted":
-            return
-        turn.sent_at = self._now()
+        if admitted == "admitted":
+            turn.sent_at = self._now()
+            await self._play(turn)
+        turn.ended = True
+        await self._listen()
+
+    async def _listen(self) -> None:
+        """Between turns, follow any turn the kernel starts itself: a greeting, a nudge."""
+        while True:
+            try:
+                body = await self._session.poll(0, POLL_S)
+            except KernelUnavailableError as error:
+                logger.warning("kernel unreachable between turns: %s", error)
+                await asyncio.sleep(POLL_S)
+                continue
+            turn_id = next((e["turn_id"] for e in body["effects"]
+                            if (e.get("turn_id") or "").startswith(KERNEL_TURN)), None)
+            if turn_id is not None:
+                turn = self._turn = _Turn(turn_id)
+                self._audio_done.clear()
+                await self._play(turn, body)
+                turn.ended = True
+
+    async def _play(self, turn: _Turn, body: dict | None = None) -> None:
         try:
-            await self._follow(turn)
+            await self._follow(turn, body)
         except KernelUnavailableError as error:
             logger.warning("kernel unreachable mid-turn: %s", error)
             if turn.streamed:
                 await self.push_frame(LLMFullResponseEndFrame())
 
-    async def _follow(self, turn: _Turn) -> None:
-        """Stream this turn's reply, then report it once it has played."""
+    async def _follow(self, turn: _Turn, first: dict | None = None) -> None:
+        """Stream this turn's reply, then report it once it has played.
+
+        ``first`` is a poll already in hand that holds the turn's first effects.
+        """
         offset = 0
         while turn.reply_seq is None:
-            body = await self._session.poll(offset, POLL_S)
+            body, first = first or await self._session.poll(offset, POLL_S), None
             tools = []
             for effect in body["effects"]:
                 kind = effect["kind"]
@@ -308,7 +340,9 @@ class SageProcessor(FrameProcessor):
         timing = {}
         if turn.sent_at is not None and turn.first_text_at is not None:
             timing["ttft_ms"] = _ms(turn.first_text_at - turn.sent_at)
-        if self._speech_ended is not None and turn.first_audio_at is not None:
+        # Only for the person's own turns: the kernel's follow no speech of theirs.
+        if (turn.sent_at is not None and self._speech_ended is not None
+                and turn.first_audio_at is not None):
             timing["first_audio_ms"] = _ms(turn.first_audio_at - self._speech_ended)
         return timing
 
@@ -360,7 +394,7 @@ class SageProcessor(FrameProcessor):
         await self._report(sequence, status)
 
     async def _emote(self, turn: _Turn, sequence: int, name: str | None) -> None:
-        status = "failed"
+        status, duration_ms = "failed", None
         if name is not None:
             playback = self._playback
             await playback.boundary()  # a move must not land mid-word
@@ -371,17 +405,18 @@ class SageProcessor(FrameProcessor):
             sound = move_sound(turn.reply_text, playback.busy) and name not in NO_SOUND
             if sound:
                 playback.hold_voice()
+            began = self._now()
             try:
                 result = self._play_emote(name, sound)
                 if inspect.isawaitable(result):
                     await result
-                status = "done"
+                status, duration_ms = "done", _ms(self._now() - began)
             except Exception:
                 logger.exception("emote %s failed", name)
             finally:
                 if sound:
                     playback.release_voice()
-        await self._report(sequence, status)
+        await self._report(sequence, status, duration_ms=duration_ms)
 
     # --- interruption ----------------------------------------------------------
 
@@ -417,10 +452,10 @@ class SageProcessor(FrameProcessor):
 
     async def _report(self, sequence: int | None, status: str, text: str | None = None,
                       timing: dict | None = None, reason: str | None = None,
-                      turn_id: str | None = None) -> None:
+                      turn_id: str | None = None, duration_ms: int | None = None) -> None:
         try:
             await self._session.result(sequence, status, text=text, timing=timing,
-                                       reason=reason, turn_id=turn_id)
+                                       reason=reason, turn_id=turn_id, duration_ms=duration_ms)
         except KernelUnavailableError as error:
             # The kernel times the effect out itself (max_s + 2 s); nothing is lost here.
             logger.warning("could not report %s for effect %s: %s", status, sequence, error)

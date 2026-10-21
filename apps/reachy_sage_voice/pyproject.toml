@@ -18,6 +18,9 @@ dependencies = [
     # The version an earlier voice bot measured its voice pipeline on. Silero's onset edge
     # drives barge-in.
     "pipecat-ai[silero]==1.12.0",
+    # Settings from a .env, as Pollen's conversation app reads them.
+    "python-dotenv>=1.2",
+    "platformdirs>=4",
 ]
 
 [project.entry-points."reachy_mini_apps"]
@@ -39,7 +42,8 @@ dev = ["pytest>=8", "ruff>=0.9"]
 # A project of its own, outside the root workspace, so Pipecat's pins
 # (protobuf <7, soundfile ~=0.13) never move the live pet's packages.
 # pipecat-ai 1.x pins onnxruntime ~=1.24.3 and reachy-mini 1.10.0 pins
-# ==1.27.0; Pipecat uses it only for Silero, smoke-tested on 1.27.0.
+# ==1.27.0; Pipecat uses it only for Silero and Smart Turn v3.2, both run on
+# 1.27.0 in tests/test_onnxruntime.py.
 # ponytail: this override is why the app installs from source only. The
 # dashboard's `uv pip install` ignores [tool.uv], so it cannot resolve the two
 # pins; drop the override, and re-tag the Space reachy_mini_python_app, once
@@ -67,6 +71,12 @@ include = ["reachy_sage_voice*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The integration suite needs a sage-kernel checkout: `make integration` runs it.
+addopts = "-m 'not integration'"
+markers = [
+    "integration: the voice against the real Sage kernel (make integration)",
+    "kernel_env: kernel settings for one integration test",
+]
 
 [tool.ruff]
 extend = "../../pyproject.toml"

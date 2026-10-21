@@ -24,6 +24,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.processors.filters.function_filter import FunctionFilter
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.tests.utils import SleepFrame, run_test
 from pipecat.transports.base_transport import TransportParams
@@ -118,6 +119,14 @@ def test_the_vad_reports_onset_for_barge_in():
     vad = next(p for p in pipeline.processors if isinstance(p, VADProcessor))
     assert vad._vad_controller._vad_analyzer._on_detected is not None
     assert vad._vad_controller._vad_analyzer._on_cleared is not None
+
+
+def test_only_addressed_speech_reaches_the_kernel_when_asked_for():
+    pipeline = build(FakeMedia(), no_emote, MOVES, {**ENV, "SAGE_VOICE_ADDRESSED": "1"},
+                     face=lambda: True)
+    kinds = [type(p) for p in pipeline.processors[1:-1]]
+    assert kinds[2:5] == [OpenAISTTService, FunctionFilter, SageProcessor]
+    assert pipeline.processors[4]._filter._face() is True
 
 
 @pytest.mark.parametrize("missing", sorted(ENV))
@@ -265,19 +274,18 @@ def test_an_interruption_mid_reply_pushes_no_more_of_it():
 
 
 def test_the_voice_is_busy_for_the_whole_reply_not_just_while_it_is_handed_over():
-    clock, media, playback = FakeClock(scale=0.1), FakeMedia(), Playback()
-    seen = {}
+    media, playback, seen = FakeMedia(), Playback(), {}
 
-    async def go():
-        async def probe():
-            await asyncio.sleep(0.1)  # 1 s into a 2 s reply
-            seen["mid"] = playback.busy
-        await asyncio.gather(
-            run_test(output_pipeline(media, clock, BotSpeech(InterruptionTracker(), playback)),
-                     frames_to_send=[*chunks(2.0, kind=TTSAudioRawFrame), TTSStoppedFrame(),
-                                     SleepFrame(0.4)]),
-            probe())
-    asyncio.run(go())
+    class Probe(FakeClock):
+        async def sleep(self, seconds):
+            await super().sleep(seconds)
+            if self.t >= 1.0:  # 1 s into a 2 s reply, by the transport's own clock
+                seen.setdefault("mid", playback.busy)
+
+    clock = Probe(scale=0.1)
+    # The EndFrame run_test sends last drains the audio queue: all of it has played by then.
+    asyncio.run(run_test(output_pipeline(media, clock, BotSpeech(InterruptionTracker(), playback)),
+                         frames_to_send=[*chunks(2.0, kind=TTSAudioRawFrame), TTSStoppedFrame()]))
     assert seen["mid"] is True
     assert playback.busy is False  # and free again once it has all played
 

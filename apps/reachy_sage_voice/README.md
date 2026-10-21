@@ -40,11 +40,8 @@ Then, from this folder:
 uv sync                  # this app's own .venv
 make -C services up      # STT on 127.0.0.1:8781, TTS on 127.0.0.1:8782 (Docker)
 
-export SAGE_VOICE_KERNEL_URL=http://127.0.0.1:8776
-export SAGE_VOICE_KERNEL_TOKEN=...            # this robot's token from the kernel
-export SAGE_VOICE_STT_URL=http://127.0.0.1:8781
-export SAGE_VOICE_TTS_URL=http://127.0.0.1:8782
-export REACHY_MINI_HOST=reachy-mini.local     # the robot's daemon
+cp .env.example .env     # then set SAGE_VOICE_KERNEL_TOKEN, this robot's token from the kernel
+export REACHY_MINI_HOST=reachy-mini.local     # the robot's daemon (or set it in .env)
 make run
 ```
 
@@ -62,16 +59,29 @@ the app must run on the same machine as them.
 The app also has the standard `reachy_mini_apps` entry point
 (`reachy_sage_voice.main:ReachySageVoice`), so a Reachy Mini daemon can launch
 it. Launched that way, it runs wherever the daemon runs (your computer for a
-Lite, the robot's Raspberry Pi for a Wireless). It inherits the daemon's
-environment, and the daemon connects to the robot, so `REACHY_MINI_HOST` is
-not needed. Installing it from the dashboard does not work yet, so the Space
+Lite, the robot's Raspberry Pi for a Wireless). It inherits only the daemon's
+environment, so put its settings in `~/.config/reachy_mini/sage_voice/.env`
+(see "Settings"), and the daemon connects to the robot, so `REACHY_MINI_HOST`
+is not needed. Installing it from the dashboard does not work yet, so the Space
 is not tagged `reachy_mini_python_app` and the dashboard does not offer it: see
 "Known limits". Running on the Pi is not a goal for 0.1.0.
 
 ## Settings
 
-Everything comes from the environment. Addresses and the token have no
-defaults, so nothing reaches the network unless you configure it to.
+Every setting is listed, with its default, in [`.env.example`](.env.example).
+Copy it to `.env` and fill it in, as for Pollen's conversation app. The app
+reads, first one wins:
+
+1. the environment;
+2. `.env` in the reachy_mini config directory, beside the daemon's own config:
+   `~/.config/reachy_mini/sage_voice/.env` on Linux
+   (`~/Library/Application Support/reachy_mini/sage_voice/.env` on macOS). Use
+   this one when the daemon launches the app;
+3. the nearest `.env` in or above the working directory (this folder, for `make run`).
+
+`.env` is gitignored: never commit a token. Addresses and the token have no
+defaults, so nothing reaches the network unless you configure it to, and a
+missing one stops the app with its name.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -89,6 +99,9 @@ defaults, so nothing reaches the network unless you configure it to.
 | `SAGE_VOICE_MIC_CHANNEL` | `mean` | `mean`, `0` or `1` of the mic array's stereo |
 | `SAGE_VOICE_PRESENCE` | `0` | `1`: report seen/lost from the face tracker (needs a kernel that accepts presence events) |
 | `SAGE_VOICE_LISTEN_CUES` | `0` | `1`: hold still while you speak, glance away while thinking |
+| `SAGE_VOICE_ADDRESSED` | `0` | `1`: answer only when addressed: a face is tracked, its name is said, or it spoke in the last few seconds. Other speech (lyrics, TV) is not sent |
+| `SAGE_VOICE_ALIASES` | `Reachy` | Names besides Sage it answers to, comma-separated |
+| `SAGE_VOICE_EXCHANGE_S` | `8` | Seconds after it spoke during which no name or face is needed |
 | `SAGE_VOICE_RECORD_DIR` | off | A local folder: save each utterance as a WAV |
 
 ## Privacy

@@ -9,3 +9,5 @@ build/
 out/
 .coverage
 htmlcov/
+# Settings with secrets; .env.example is the committed template.
+.env

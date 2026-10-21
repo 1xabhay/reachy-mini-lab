@@ -1,9 +1,10 @@
 """Run Reachy's Sage voice on the robot: ``make run`` (``python -m reachy_sage_voice``).
 
-Everything comes from the environment (see pipeline.py, plus REACHY_MINI_HOST)
-and every address must be set: nothing falls back to a network default. The
-motors are enabled before the robot wakes; ``wake_up()`` alone leaves the head
-limp after a reboot (the pet learned this, live.py ``wake``).
+Everything comes from the environment (see pipeline.py, plus REACHY_MINI_HOST),
+filled in from a .env (``load_settings``), and every address must be set:
+nothing falls back to a network default. The motors are enabled before the
+robot wakes; ``wake_up()`` alone leaves the head limp after a reboot
+(the pet learned this, live.py ``wake``).
 """
 
 import asyncio
@@ -15,10 +16,35 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 HOST = "REACHY_MINI_HOST"
+
+
+def env_files() -> list[Path]:
+    """Name the .env files, first wins: beside the daemon's config, then nearest above the CWD.
+
+    Pollen's conversation app reads the same two (its instance .env in
+    ``user_config_dir("reachy_mini")``, and ``find_dotenv(usecwd=True)``).
+    """
+    from dotenv import find_dotenv
+    from platformdirs import user_config_dir
+
+    # find_dotenv gives "" when there is none: Path("") is ".", not a file.
+    return [Path(user_config_dir("reachy_mini"), "sage_voice", ".env"),
+            Path(find_dotenv(usecwd=True))]
+
+
+def load_settings() -> None:
+    """Fill the settings the environment leaves unset from the .env files; the environment wins."""
+    from dotenv import load_dotenv
+
+    for path in env_files():
+        if path.is_file():
+            load_dotenv(path, override=False)
+            logger.info("settings from %s", path)
 
 
 def unreachable(env: Mapping[str, str], get: Callable = urllib.request.urlopen) -> list[str]:
@@ -92,6 +118,9 @@ def live(mini, declared: Mapping, env: Mapping[str, str], run: Callable | None,
         from reachy_sage_voice import pipeline
 
         run = pipeline.run
+    from reachy_sage_voice.robot import Reconnecting
+
+    mini = Reconnecting(mini)  # the SDK's command websocket never reconnects by itself
     mini.enable_motors()  # a requirement: if it fails, nothing else can move
     try:
         mini.wake_up()
@@ -110,10 +139,12 @@ def live(mini, declared: Mapping, env: Mapping[str, str], run: Callable | None,
         mini.media.play_sound(str(declared[name].sound_path))
         await asyncio.sleep(declared[name].duration)
 
+    def face() -> bool:
+        return mini.get_tracked_face(wait=False).detected
+
     presence = None
     if env.get("SAGE_VOICE_PRESENCE", "0") == "1":  # off until the kernel accepts it
-        def presence() -> bool:
-            return mini.get_tracked_face(wait=False).detected
+        presence = face
 
     observers = []
     if env.get("SAGE_VOICE_LISTEN_CUES", "0") == "1":  # off until tuned on the robot
@@ -123,7 +154,7 @@ def live(mini, declared: Mapping, env: Mapping[str, str], run: Callable | None,
         play_emote, observers = cues.during(play_emote), [cues.observer()]
 
     voice = run(mini.media, play_emote, declared, env, play_sound=play_sound,
-                presence=presence, observers=observers)
+                presence=presence, observers=observers, face=face)
     asyncio.run(voice if stop_event is None else until(stop_event, voice))
 
 
@@ -140,4 +171,5 @@ async def until(stop_event: threading.Event, voice) -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    load_settings()
     main()

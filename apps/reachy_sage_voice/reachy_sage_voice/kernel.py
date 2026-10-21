@@ -183,14 +183,17 @@ class Session:
     async def _io(self, fn, *args):
         return await asyncio.to_thread(fn, *args)
 
-    async def start(self, turn_id: str, text: str, timing: dict) -> str:
-        """Submit a turn: "admitted", "busy" (gave up after ``retry_s``), or "refused"."""
-        # Before every turn: the kernel forgets manifests when it restarts.
+    async def hello(self) -> None:
+        """Declare this body; the first time, start the cursor at the journal's head."""
         status, body = await self._io(self.client.hello, self.manifest)
         if status != 200:
             raise KernelUnavailableError(f"hello refused: {body}")
         if self.cursor is None:
             self.cursor = body["sequence"]  # start at the head: never replay old replies
+
+    async def start(self, turn_id: str, text: str, timing: dict) -> str:
+        """Submit a turn: "admitted", "busy" (gave up after ``retry_s``), or "refused"."""
+        await self.hello()  # before every turn: the kernel forgets manifests when it restarts
         event = {"kind": "submitted", "turn_id": turn_id, "text": text}
         if timing:
             event["timing"] = timing
@@ -223,6 +226,8 @@ class Session:
 
     async def poll(self, offset: int, wait: float) -> dict:
         """One long poll. Advances the cursor; a ``reset`` restarts it and returns nothing."""
+        if self.cursor is None:
+            await self.hello()  # from the journal's head, never from 0: old replies stay old
         status, body = await self._io(self.client.effects, self.cursor or 0, wait, offset)
         if status == 409 and body.get("code") == "reset":
             self.cursor = body["sequence"]
@@ -234,9 +239,10 @@ class Session:
 
     async def result(self, sequence: int | None, status: str, text: str | None = None,
                      timing: dict | None = None, reason: str | None = None,
-                     turn_id: str | None = None) -> None:
+                     turn_id: str | None = None, duration_ms: int | None = None) -> None:
         """Report how one delivered effect went: done, failed or interrupted.
 
+        ``duration_ms`` is how long the body spent performing it.
         A reply still streaming has no sequence: pass ``turn_id`` instead.
         ponytail: that shape is assumed; the v1 amendment that lets a streaming
         device report is not written yet. Change it here only.
@@ -253,6 +259,8 @@ class Session:
             event["timing"] = timing
         if reason is not None:
             event["reason"] = reason
+        if duration_ms is not None:
+            event["duration_ms"] = duration_ms
         await self._io(self.client.event, event)
 
     async def presence(self, state: str, confidence: float) -> None:
