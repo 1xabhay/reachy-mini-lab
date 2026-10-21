@@ -39,7 +39,8 @@ dev = ["pytest>=8", "ruff>=0.9"]
 # A project of its own, outside the root workspace, so Pipecat's pins
 # (protobuf <7, soundfile ~=0.13) never move the live pet's packages.
 # pipecat-ai 1.x pins onnxruntime ~=1.24.3 and reachy-mini 1.10.0 pins
-# ==1.27.0; Pipecat uses it only for Silero, smoke-tested on 1.27.0.
+# ==1.27.0; Pipecat uses it only for Silero and Smart Turn v3.2, both run on
+# 1.27.0 in tests/test_onnxruntime.py.
 # ponytail: this override is why the app installs from source only. The
 # dashboard's `uv pip install` ignores [tool.uv], so it cannot resolve the two
 # pins; drop the override, and re-tag the Space reachy_mini_python_app, once
