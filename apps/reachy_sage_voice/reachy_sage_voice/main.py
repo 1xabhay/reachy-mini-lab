@@ -1,6 +1,6 @@
 """The voice as a Reachy Mini app: the daemon launches ``python -m reachy_sage_voice.main``.
 
-Settings come from the environment as for ``make run`` (README.md, "Settings"),
+Settings come from the environment and .env as for ``make run`` (README.md, "Settings"),
 except the robot's address: the daemon connects to the robot itself.
 """
 
@@ -16,8 +16,9 @@ class ReachySageVoice(ReachyMiniApp):
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
         """Run the voice on the robot until the daemon stops the app."""
-        from reachy_sage_voice.__main__ import app
+        from reachy_sage_voice.__main__ import app, load_settings
 
+        load_settings()
         app(reachy_mini, os.environ, stop_event)
 
 

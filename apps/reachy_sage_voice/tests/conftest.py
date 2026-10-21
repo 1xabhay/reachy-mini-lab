@@ -21,6 +21,14 @@ TOKEN = "t" * 32
 pipecat_test_utils.run_test.__kwdefaults__["start_timeout"] = 10.0
 
 
+@pytest.fixture(autouse=True)
+def no_real_dotenv(monkeypatch):
+    """No test reads a real .env: the only settings files are the ones a test makes."""
+    import reachy_sage_voice.__main__ as voice
+
+    monkeypatch.setattr(voice, "env_files", lambda: [])
+
+
 class FakeKernel:
     def __init__(self):
         self.replies: dict[tuple[str, str], list[tuple[int, object]]] = {}

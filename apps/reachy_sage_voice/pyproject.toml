@@ -18,6 +18,9 @@ dependencies = [
     # The version an earlier voice bot measured its voice pipeline on. Silero's onset edge
     # drives barge-in.
     "pipecat-ai[silero]==1.12.0",
+    # Settings from a .env, as Pollen's conversation app reads them.
+    "python-dotenv>=1.2",
+    "platformdirs>=4",
 ]
 
 [project.entry-points."reachy_mini_apps"]

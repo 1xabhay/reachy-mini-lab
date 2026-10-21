@@ -1,7 +1,7 @@
 test:
 	uv run pytest -q
 
-# The voice on the robot. Reads only the environment: see README.md, "Run it".
+# The voice on the robot. Reads the environment and .env: see README.md, "Settings".
 run:
 	uv run python -m reachy_sage_voice
 
