@@ -118,6 +118,9 @@ def live(mini, declared: Mapping, env: Mapping[str, str], run: Callable | None,
         from reachy_sage_voice import pipeline
 
         run = pipeline.run
+    from reachy_sage_voice.robot import Reconnecting
+
+    mini = Reconnecting(mini)  # the SDK's command websocket never reconnects by itself
     mini.enable_motors()  # a requirement: if it fails, nothing else can move
     try:
         mini.wake_up()
