@@ -250,7 +250,7 @@ def test_the_mind_remembers_the_conversation():
     mind = Mind(think=remember)
     mind.start(bus)
 
-    bus.publish(Heard(text="my name is Abhay"))
+    bus.publish(Heard(text="my name is Sam"))
     mind.step()
     bus.publish(Heard(text="what is my name"))
     mind.step()

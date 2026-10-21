@@ -36,7 +36,7 @@ DEFAULT_AMPLITUDE_DEG = 15.0
 #
 # These are NOT vendor specification - Pollen publish no positioning-accuracy
 # figure. They are the numbers you would want from a head that can be pointed
-# open-loop. Measurements from unit 2f102f4682d69822 (see README) sit well
+# open-loop. Measurements from our unit (see README) sit well
 # outside several of them, so treat a FAIL as "worth understanding", not
 # "return the robot". Retune them for your own unit once you know its baseline;
 # `TOL_REPEAT_DEG` is the one that reflects a genuine fault if exceeded.

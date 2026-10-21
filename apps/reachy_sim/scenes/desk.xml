@@ -1,0 +1,36 @@
+<!-- Pollen's `minimal` scene cut down to a desk: the table, a screen off to the
+     robot's right, and a person across the desk, for look-at tests.
+     Installed next to the SDK's scenes by sim.py; paths are relative to there. -->
+<mujoco model="desk">
+    <include file="../reachy_mini.xml" />
+    <compiler meshdir="../assets" texturedir="../assets" />
+    <visual>
+        <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0" />
+        <global azimuth="160" elevation="-20" offwidth="1280" offheight="720"/>
+    </visual>
+    <asset>
+        <texture type="2d" name="wooden_table_02_diff"
+            file="wooden_table_02_1k.blend/textures/wooden_table_02_diff_1k.png" />
+        <material name="wooden_table_02_material" texture="wooden_table_02_diff" />
+        <mesh name="wooden_table_02_mesh" file="wooden_table_02_1k.blend/wooden_table_02_1k.obj" />
+    </asset>
+    <worldbody>
+        <light pos="-0.5 0 3.5" dir="0 0 -1" directional="true" />
+        <geom name="floor" size="0 0 0.05" pos="0 0 -0.8" type="plane" rgba="0.2 0.3 0.4 1" />
+        <body name="table" pos="0.35 0 -0.8" euler="1.57 0 0">
+            <geom name="table_geom" class="visual" type="mesh" mesh="wooden_table_02_mesh"
+                material="wooden_table_02_material" />
+            <geom name="table_top_collision" class="collision" type="box"
+                size="0.56 0.03 0.35" pos="0 0.77 0" />
+        </body>
+        <!-- A monitor on the desk, 0.5 m ahead and 0.25 m to the robot's right,
+             turned towards it. -->
+        <body name="screen" pos="0.5 -0.25 0.15" euler="0 0 0.46">
+            <geom name="screen" type="box" size="0.01 0.16 0.1" rgba="0.1 0.1 0.12 1" />
+        </body>
+        <!-- The person's face, straight ahead across the desk at seated eye height. -->
+        <body name="person" pos="0.9 0 0.3">
+            <geom name="person" type="sphere" size="0.09" rgba="0.9 0.7 0.6 1" />
+        </body>
+    </worldbody>
+</mujoco>

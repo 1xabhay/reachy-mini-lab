@@ -79,6 +79,14 @@ tuning knobs, and what it deliberately does not do yet;
 [CONTRIBUTING.md](apps/reachy_mini_pet/CONTRIBUTING.md) for how to add a layer
 or swap a model.
 
+## Sage voice
+
+A real-time local voice for the robot, with a Sage kernel as its mind, packaged
+as a standard Reachy Mini app. See
+[apps/reachy_sage_voice/README.md](apps/reachy_sage_voice/README.md) for the
+quick start. It and [apps/reachy_sim](apps/reachy_sim/README.md) are uv
+projects of their own, outside the workspace below.
+
 ## Layout
 
 ```
@@ -117,7 +125,7 @@ on a mismatch at connect time. Check the robot's version with:
 curl -s http://reachy-mini.local:8000/api/daemon/status
 ```
 
-## Baseline for unit `2f102f4682d69822`
+## Baseline for one unit
 
 Measured 2026-08-27, SDK/daemon 1.10.0. Healthy: 9 joints, IMU 9.76 m/s² at rest,
 camera 1280x720 at ~19 fps over WebRTC, mic 16 kHz stereo, control loop 49.7 Hz
@@ -204,3 +212,8 @@ fault if it started failing.
 - Apps run on the robot's own Pi when launched through the daemon; run from a
   laptop they connect over the network and media arrives via WebRTC instead of
   local IPC. Both paths are supported, WebRTC is the slower one.
+
+## Licence
+
+Apache-2.0: see [LICENSE](LICENSE). Each app's third-party models and software
+keep their own licences, listed in its NOTICE where it has one.
