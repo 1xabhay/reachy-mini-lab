@@ -1,6 +1,11 @@
 test:
 	uv run pytest -q
 
+# The voice against the real Sage kernel on a free loopback port, with its conformance
+# fake model. CPU only. The kernel is SAGE_KERNEL_DIR, default the sibling sage-kernel checkout.
+integration:
+	uv run pytest -q -m integration tests/integration
+
 # The voice on the robot. Reads the environment and .env: see README.md, "Settings".
 run:
 	uv run python -m reachy_sage_voice

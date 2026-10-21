@@ -225,7 +225,7 @@ def test_results_and_stop_go_out_as_events(kernel):
 
     async def go():
         await s.result(42, "interrupted", text="Hello, I was", timing={"first_audio_ms": 700})
-        await s.result(41, "done")
+        await s.result(41, "done", duration_ms=2300)
         await s.result(43, "failed", reason="stale")
         await s.result(None, "interrupted", text="Once upon", turn_id="reachy-2")
         await s.stop("reachy-1")
@@ -233,7 +233,7 @@ def test_results_and_stop_go_out_as_events(kernel):
     assert kernel.events() == [
         {"kind": "result", "sequence": 42, "status": "interrupted", "text": "Hello, I was",
          "timing": {"first_audio_ms": 700}},
-        {"kind": "result", "sequence": 41, "status": "done"},
+        {"kind": "result", "sequence": 41, "status": "done", "duration_ms": 2300},
         {"kind": "result", "sequence": 43, "status": "failed", "reason": "stale"},
         # A reply still streaming has no sequence yet: it is named by its turn
         # (assumed shape of the pending v1 amendment for streaming devices).

@@ -71,6 +71,12 @@ include = ["reachy_sage_voice*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The integration suite needs a sage-kernel checkout: `make integration` runs it.
+addopts = "-m 'not integration'"
+markers = [
+    "integration: the voice against the real Sage kernel (make integration)",
+    "kernel_env: kernel settings for one integration test",
+]
 
 [tool.ruff]
 extend = "../../pyproject.toml"
