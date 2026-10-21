@@ -110,10 +110,12 @@ def live(mini, declared: Mapping, env: Mapping[str, str], run: Callable | None,
         mini.media.play_sound(str(declared[name].sound_path))
         await asyncio.sleep(declared[name].duration)
 
+    def face() -> bool:
+        return mini.get_tracked_face(wait=False).detected
+
     presence = None
     if env.get("SAGE_VOICE_PRESENCE", "0") == "1":  # off until the kernel accepts it
-        def presence() -> bool:
-            return mini.get_tracked_face(wait=False).detected
+        presence = face
 
     observers = []
     if env.get("SAGE_VOICE_LISTEN_CUES", "0") == "1":  # off until tuned on the robot
@@ -123,7 +125,7 @@ def live(mini, declared: Mapping, env: Mapping[str, str], run: Callable | None,
         play_emote, observers = cues.during(play_emote), [cues.observer()]
 
     voice = run(mini.media, play_emote, declared, env, play_sound=play_sound,
-                presence=presence, observers=observers)
+                presence=presence, observers=observers, face=face)
     asyncio.run(voice if stop_event is None else until(stop_event, voice))
 
 

@@ -25,6 +25,9 @@ here can reach the internet unless someone configures it to.
     SAGE_VOICE_MIC_CHANNEL   mean (default), 0 or 1 of the mic array's stereo
     SAGE_VOICE_RECORD_DIR    save each utterance's raw stereo there as WAV; default off
     SAGE_VOICE_LISTEN_CUES   1 for listening and thinking cues (listen_cues.py); default 0
+    SAGE_VOICE_ADDRESSED     1 to answer only when addressed (addressed.py); default 0
+    SAGE_VOICE_ALIASES       names besides Sage it answers to, comma-separated; default Reachy
+    SAGE_VOICE_EXCHANGE_S    seconds after it spoke that need no name or face; default 8
 """
 
 import asyncio
@@ -50,6 +53,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from reachy_sage_voice import clause, turn_end
+from reachy_sage_voice.addressed import addressed_filter
 from reachy_sage_voice.interruption import InterruptionTracker
 from reachy_sage_voice.kernel import KernelClient, KernelUnavailableError, Session, manifest
 from reachy_sage_voice.onset import build_speech_onset_silero, make_speech_onset_handler
@@ -142,10 +146,12 @@ class TurnSTTService(OpenAISTTService):
 
 
 def build(media: ReachyMedia, play_emote: Callable, moves: Mapping,
-          env: Mapping[str, str] = os.environ, play_sound: Callable | None = None) -> Pipeline:
+          env: Mapping[str, str] = os.environ, play_sound: Callable | None = None,
+          face: Callable[[], bool] | None = None) -> Pipeline:
     """Assemble the pipeline. Connects to nothing until it runs.
 
-    ``moves`` is the declared vocabulary from the moves library (``load_moves``).
+    ``moves`` is the declared vocabulary from the moves library (``load_moves``);
+    ``face`` reads the face tracker, for SAGE_VOICE_ADDRESSED.
     """
     missing = [name for name in REQUIRED if not env.get(name)]
     if missing:
@@ -186,6 +192,7 @@ def build(media: ReachyMedia, play_emote: Callable, moves: Mapping,
 
     session = Session(KernelClient(env["SAGE_VOICE_KERNEL_URL"], env["SAGE_VOICE_KERNEL_TOKEN"]),
                       manifest(moves))
+    gate = addressed_filter(env, face)
     return Pipeline([
         ReachyInputTransport(media, TransportParams(audio_in_enabled=True,
                                                     audio_in_sample_rate=16000),
@@ -194,6 +201,7 @@ def build(media: ReachyMedia, play_emote: Callable, moves: Mapping,
         *([user_turns(smart_turn_analyzer(
             int(env.get("SAGE_VOICE_TURN_TIMEOUT_MS", 1500)) / 1000))] if smart else []),
         stt,
+        *([gate] if gate else []),
         SageProcessor(session, play_emote, playback, play_sound=play_sound),
         tts,
         ReachyOutputTransport(media, TransportParams(
@@ -212,14 +220,15 @@ async def report_presence(session, event: dict) -> None:
 
 async def run(media: ReachyMedia, play_emote: Callable, moves: Mapping,
               env: Mapping[str, str] = os.environ, play_sound: Callable | None = None,
-              presence: Callable[[], bool] | None = None, observers: list | None = None) -> None:
+              presence: Callable[[], bool] | None = None, observers: list | None = None,
+              face: Callable[[], bool] | None = None) -> None:
     """Run the voice until cancelled. Always on: no idle timeout.
 
     ``presence`` reads the face tracker; when given, seen/lost edges go to the kernel.
     ``observers`` watch the frames (``listen_cues.py``).
     """
     runner = WorkerRunner()
-    pipeline = build(media, play_emote, moves, env, play_sound)
+    pipeline = build(media, play_emote, moves, env, play_sound, face)
     await runner.add_workers(PipelineWorker(pipeline, idle_timeout_secs=None,
                                                 observers=observers))
     if presence is None:

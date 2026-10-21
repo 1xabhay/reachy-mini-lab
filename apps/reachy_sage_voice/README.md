@@ -89,6 +89,9 @@ defaults, so nothing reaches the network unless you configure it to.
 | `SAGE_VOICE_MIC_CHANNEL` | `mean` | `mean`, `0` or `1` of the mic array's stereo |
 | `SAGE_VOICE_PRESENCE` | `0` | `1`: report seen/lost from the face tracker (needs a kernel that accepts presence events) |
 | `SAGE_VOICE_LISTEN_CUES` | `0` | `1`: hold still while you speak, glance away while thinking |
+| `SAGE_VOICE_ADDRESSED` | `0` | `1`: answer only when addressed: a face is tracked, its name is said, or it spoke in the last few seconds. Other speech (lyrics, TV) is not sent |
+| `SAGE_VOICE_ALIASES` | `Reachy` | Names besides Sage it answers to, comma-separated |
+| `SAGE_VOICE_EXCHANGE_S` | `8` | Seconds after it spoke during which no name or face is needed |
 | `SAGE_VOICE_RECORD_DIR` | off | A local folder: save each utterance as a WAV |
 
 ## Privacy

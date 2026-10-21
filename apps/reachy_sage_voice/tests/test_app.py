@@ -38,7 +38,8 @@ def app(monkeypatch):
         monkeypatch.setenv(name, value)
     ran = {}
 
-    async def run(media, play_emote, moves, env, play_sound=None, presence=None, observers=()):
+    async def run(media, play_emote, moves, env, play_sound=None, presence=None, observers=(),
+                  face=None):
         ran.update(env=dict(env), moves=moves)
         try:
             await asyncio.Event().wait() if ran.get("forever") else None
