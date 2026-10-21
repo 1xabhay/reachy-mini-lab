@@ -24,6 +24,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.processors.filters.function_filter import FunctionFilter
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.tests.utils import SleepFrame, run_test
 from pipecat.transports.base_transport import TransportParams
@@ -118,6 +119,14 @@ def test_the_vad_reports_onset_for_barge_in():
     vad = next(p for p in pipeline.processors if isinstance(p, VADProcessor))
     assert vad._vad_controller._vad_analyzer._on_detected is not None
     assert vad._vad_controller._vad_analyzer._on_cleared is not None
+
+
+def test_only_addressed_speech_reaches_the_kernel_when_asked_for():
+    pipeline = build(FakeMedia(), no_emote, MOVES, {**ENV, "SAGE_VOICE_ADDRESSED": "1"},
+                     face=lambda: True)
+    kinds = [type(p) for p in pipeline.processors[1:-1]]
+    assert kinds[2:5] == [OpenAISTTService, FunctionFilter, SageProcessor]
+    assert pipeline.processors[4]._filter._face() is True
 
 
 @pytest.mark.parametrize("missing", sorted(ENV))

@@ -54,9 +54,10 @@ class Robot:
 def start(env, fail_wake=False, fail_track=False):
     calls, ran = [], {}
 
-    async def run(media, play_emote, moves, env, play_sound=None, presence=None, observers=()):
+    async def run(media, play_emote, moves, env, play_sound=None, presence=None, observers=(),
+            face=None):
         ran.update(media=media, moves=moves, env=env, play_sound=play_sound, presence=presence,
-                   observers=observers)
+                   observers=observers, face=face)
         await play_emote("cheerful1", True)
 
     main(env=env, robot=lambda **kw: Robot(calls, fail_wake, fail_track, **kw), run=run,
@@ -119,6 +120,12 @@ def test_presence_is_off_unless_asked_for():
 def test_presence_on_reads_the_daemons_face_tracker_without_waiting():
     calls, ran = start({**ENV, "SAGE_VOICE_PRESENCE": "1"})
     assert ran["presence"]() is True
+    assert ("face", False) in calls
+
+
+def test_the_face_tracker_is_handed_to_the_voice_for_addressing():
+    calls, ran = start(ENV)
+    assert ran["face"]() is True
     assert ("face", False) in calls
 
 
