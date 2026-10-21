@@ -360,7 +360,7 @@ class SageProcessor(FrameProcessor):
         await self._report(sequence, status)
 
     async def _emote(self, turn: _Turn, sequence: int, name: str | None) -> None:
-        status = "failed"
+        status, duration_ms = "failed", None
         if name is not None:
             playback = self._playback
             await playback.boundary()  # a move must not land mid-word
@@ -371,17 +371,18 @@ class SageProcessor(FrameProcessor):
             sound = move_sound(turn.reply_text, playback.busy) and name not in NO_SOUND
             if sound:
                 playback.hold_voice()
+            began = self._now()
             try:
                 result = self._play_emote(name, sound)
                 if inspect.isawaitable(result):
                     await result
-                status = "done"
+                status, duration_ms = "done", _ms(self._now() - began)
             except Exception:
                 logger.exception("emote %s failed", name)
             finally:
                 if sound:
                     playback.release_voice()
-        await self._report(sequence, status)
+        await self._report(sequence, status, duration_ms=duration_ms)
 
     # --- interruption ----------------------------------------------------------
 
@@ -417,10 +418,10 @@ class SageProcessor(FrameProcessor):
 
     async def _report(self, sequence: int | None, status: str, text: str | None = None,
                       timing: dict | None = None, reason: str | None = None,
-                      turn_id: str | None = None) -> None:
+                      turn_id: str | None = None, duration_ms: int | None = None) -> None:
         try:
             await self._session.result(sequence, status, text=text, timing=timing,
-                                       reason=reason, turn_id=turn_id)
+                                       reason=reason, turn_id=turn_id, duration_ms=duration_ms)
         except KernelUnavailableError as error:
             # The kernel times the effect out itself (max_s + 2 s); nothing is lost here.
             logger.warning("could not report %s for effect %s: %s", status, sequence, error)

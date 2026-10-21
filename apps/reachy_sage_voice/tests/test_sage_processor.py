@@ -60,9 +60,10 @@ class FakeSession:
             body["turn"]["turn_id"] = turn_id
         return {"sequence": 0, "effects": [], **body}
 
-    async def result(self, sequence, status, text=None, timing=None, reason=None, turn_id=None):
+    async def result(self, sequence, status, text=None, timing=None, reason=None, turn_id=None,
+                     duration_ms=None):
         r = {"sequence": sequence, "status": status, "text": text, "timing": timing,
-             "reason": reason, "turn_id": turn_id}
+             "reason": reason, "turn_id": turn_id, "duration_ms": duration_ms}
         self.results.append({k: v for k, v in r.items() if v is not None})
 
     async def stop(self, turn_id):
@@ -174,9 +175,10 @@ def test_a_stop_effect_interrupts_the_body():
 def test_an_emote_effect_plays_on_the_body_and_reports_done():
     emotes = []
     session = FakeSession([{"effects": [emote(41, "cheerful1"), reply(42, "")]}])
-    run(make(session, emotes), [heard("hi"), SleepFrame(0.1)])
+    run(make(session, emotes, move_s=0.05), [heard("hi"), SleepFrame(0.2)])
     assert emotes == ["cheerful1"]
-    assert {"sequence": 41, "status": "done"} in session.results
+    (result,) = [r for r in session.results if r["sequence"] == 41]
+    assert result["status"] == "done" and 45 <= result["duration_ms"] < 200  # how long it took
 
 
 def test_an_emote_the_body_cannot_perform_reports_failed():
@@ -199,7 +201,7 @@ def test_an_emote_with_nothing_playing_goes_at_once():
     session = FakeSession([{"effects": [emote(41, "cheerful1")]}])  # before any reply text
     run(make(session, emotes), [heard("hi"), SleepFrame(0.1)])
     assert emotes == ["cheerful1"]
-    assert session.results == [{"sequence": 41, "status": "done"}]
+    assert session.results == [{"sequence": 41, "status": "done", "duration_ms": 0}]
 
 
 def test_with_nothing_to_say_the_move_plays_its_own_sound():

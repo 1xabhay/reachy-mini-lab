@@ -234,9 +234,10 @@ class Session:
 
     async def result(self, sequence: int | None, status: str, text: str | None = None,
                      timing: dict | None = None, reason: str | None = None,
-                     turn_id: str | None = None) -> None:
+                     turn_id: str | None = None, duration_ms: int | None = None) -> None:
         """Report how one delivered effect went: done, failed or interrupted.
 
+        ``duration_ms`` is how long the body spent performing it.
         A reply still streaming has no sequence: pass ``turn_id`` instead.
         ponytail: that shape is assumed; the v1 amendment that lets a streaming
         device report is not written yet. Change it here only.
@@ -253,6 +254,8 @@ class Session:
             event["timing"] = timing
         if reason is not None:
             event["reason"] = reason
+        if duration_ms is not None:
+            event["duration_ms"] = duration_ms
         await self._io(self.client.event, event)
 
     async def presence(self, state: str, confidence: float) -> None:
