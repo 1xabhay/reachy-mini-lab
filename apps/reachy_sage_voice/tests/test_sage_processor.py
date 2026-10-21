@@ -98,15 +98,21 @@ def spoken(down):
     return [f.text for f in down if isinstance(f, (LLMTextFrame, TTSSpeakFrame))]
 
 
-def make(session, emotes=None, playback=None, fail_emote=False, sounds=None, move_s=0.0):
+def make(session, emotes=None, playback=None, fail_emote=False, sounds=None, move_s=0.0,
+         now=None):
+    """Make a processor whose clock, unless ``now`` is given, moves only while a move plays."""
+    clock = [0.0]
+
     async def play_emote(name, sound):
         if fail_emote:
             raise RuntimeError("motor fault")
         emotes.append(name)
         if sounds is not None:
             sounds.append((name, sound))
-        await asyncio.sleep(move_s)
-    return SageProcessor(session, play_emote, playback or Playback())
+        clock[0] += move_s
+        await asyncio.sleep(0)
+    return SageProcessor(session, play_emote, playback or Playback(),
+                         now=now or (lambda: clock[0]))
 
 
 def test_reply_pieces_stream_to_tts_as_they_arrive_then_only_the_rest():
@@ -125,9 +131,10 @@ def test_reply_pieces_stream_to_tts_as_they_arrive_then_only_the_rest():
 
 def test_a_played_reply_is_reported_done_with_its_timing():
     session = FakeSession([{"effects": [delta(0, "Hello.")]}, {"effects": [reply(42, "Hello.")]}])
-    run(make(session), [VADUserStoppedSpeakingFrame(stop_secs=0.2), SleepFrame(0.05),
-                        heard("hi"), SleepFrame(0.1), BotStartedSpeakingFrame(),
-                        SleepFrame(0.05), BotStoppedSpeakingFrame(), SleepFrame(0.05)])
+    run(make(session, now=time.monotonic), [
+        VADUserStoppedSpeakingFrame(stop_secs=0.2), SleepFrame(0.05), heard("hi"),
+        SleepFrame(0.1), BotStartedSpeakingFrame(), SleepFrame(0.05), BotStoppedSpeakingFrame(),
+        SleepFrame(0.05)])
     stt_ms = session.started[0][2]["stt_ms"]
     assert 200 <= stt_ms < 1000  # end of speech is stop_secs before the VAD said so
     (result,) = session.results
@@ -180,7 +187,7 @@ def test_an_emote_effect_plays_on_the_body_and_reports_done():
     run(make(session, emotes, move_s=0.05), [heard("hi"), SleepFrame(0.2)])
     assert emotes == ["cheerful1"]
     (result,) = [r for r in session.results if r["sequence"] == 41]
-    assert result["status"] == "done" and 45 <= result["duration_ms"] < 200  # how long it took
+    assert result["status"] == "done" and result["duration_ms"] == 50  # how long it took
 
 
 def test_an_emote_the_body_cannot_perform_reports_failed():
