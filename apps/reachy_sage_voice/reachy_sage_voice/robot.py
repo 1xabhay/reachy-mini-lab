@@ -5,8 +5,10 @@ ping, not exposed by the SDK) gives up when this machine stalls. From then on
 every command raises ``ConnectionError("Lost connection with the server.")``
 while WebRTC audio carries on. So on that error: one fresh WSClient in place of
 the dead one (the media session is kept), motors and face tracking back on,
-then the call once more. At most once per ``every`` seconds; a reconnect runs
-off the event loop, so the voice never waits on it.
+then the call once more; a move (an async call) is skipped instead, as a late
+emote is wrong. A face read on a dead link reconnects too and reads as no face,
+since the cached status it would return is stale. At most once per ``every``
+seconds; a reconnect runs off the event loop, so the voice never waits on it.
 """
 
 import asyncio
@@ -16,6 +18,8 @@ import logging
 import math
 import threading
 import time
+
+from reachy_mini.io.protocol import FaceTarget
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +55,8 @@ class Reconnecting:
                 except ConnectionError:
                     if not await asyncio.to_thread(self._reconnect, client):
                         raise
-                return await attr(*args, **kwargs)
+                logger.warning("skipped %s after reconnecting: a late move is wrong", name)
+                return None
         else:
             def call(*args, **kwargs):
                 client = getattr(self._mini, "client", None)
@@ -62,6 +67,14 @@ class Reconnecting:
                         raise
                 return attr(*args, **kwargs)
         return functools.wraps(attr)(call)
+
+    def get_tracked_face(self, *args, **kwargs):
+        """Read the tracked face; no face while the link is dead (its cached status is stale)."""
+        client = self._mini.client
+        if not client.is_connected():
+            self._reconnect(client)
+            return FaceTarget()
+        return self._mini.get_tracked_face(*args, **kwargs)
 
     def _reconnect(self, dead) -> bool:
         """Replace the ``dead`` client; True if the call is worth trying again."""

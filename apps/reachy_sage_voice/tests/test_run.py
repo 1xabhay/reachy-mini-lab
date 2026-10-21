@@ -23,6 +23,7 @@ class Robot:
         self.calls, self.fail_wake, self.fail_track = calls, fail_wake, fail_track
         calls.append(("connect", kwargs))
         self.media = object()
+        self.client = type("Client", (), {"is_connected": lambda self: True})()
 
     def __enter__(self):
         return self
