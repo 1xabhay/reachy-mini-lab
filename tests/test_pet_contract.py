@@ -31,6 +31,7 @@ def accepts(func, name: str) -> bool:
 @pytest.mark.parametrize(
     "method",
     [
+        "enable_motors",
         "wake_up",
         "goto_sleep",
         "enable_wobbling",

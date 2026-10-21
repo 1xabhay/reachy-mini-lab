@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reachy-sage-voice"
+version = "0.1.0"
+description = "Real-time voice for Reachy Mini as a light client of the Sage kernel, on Pipecat"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.12"
+keywords = ["reachy-mini-app"]
+dependencies = [
+    "numpy>=2.2.5",
+    # The robot SDK version the pet runs on.
+    "reachy-mini==1.10.0",
+    # The version an earlier voice bot measured its voice pipeline on. Silero's onset edge
+    # drives barge-in.
+    "pipecat-ai[silero]==1.12.0",
+]
+
+[project.entry-points."reachy_mini_apps"]
+# The key is the project name exactly, as `reachy-mini-app-assistant check` wants.
+reachy-sage-voice = "reachy_sage_voice.main:ReachySageVoice"
+
+[project.scripts]
+# Calibrate the turn-end silence on recordings of the owner talking to the robot.
+sage-voice-turn-end = "reachy_sage_voice.turn_end:main"
+
+[project.urls]
+Source = "https://github.com/1xabhay/reachy-mini-lab/tree/main/apps/reachy_sage_voice"
+Space = "https://huggingface.co/spaces/sabhay22/reachy_sage_voice"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[tool.uv]
+# A project of its own, outside the root workspace, so Pipecat's pins
+# (protobuf <7, soundfile ~=0.13) never move the live pet's packages.
+# pipecat-ai 1.x pins onnxruntime ~=1.24.3 and reachy-mini 1.10.0 pins
+# ==1.27.0; Pipecat uses it only for Silero, smoke-tested on 1.27.0.
+# ponytail: this override is why the app installs from source only. The
+# dashboard's `uv pip install` ignores [tool.uv], so it cannot resolve the two
+# pins; drop the override, and re-tag the Space reachy_mini_python_app, once
+# pipecat-ai and reachy-mini agree on onnxruntime.
+override-dependencies = ["onnxruntime==1.27.0"]
+# The robot's media stack exactly as the pet runs it: gstreamer-plugins 1.28.8,
+# the newest, has no cp312 wheel.
+constraint-dependencies = [
+    "gstreamer-bundle==1.28.3",
+    "gstreamer-cli==1.28.6",
+    "gstreamer-ext-runtime==1.28.6",
+    "gstreamer-gtk==1.28.6",
+    "gstreamer-libs==1.28.6",
+    "gstreamer-plugins==1.28.6",
+    "gstreamer-plugins-gpl==1.28.6",
+    "gstreamer-plugins-gpl-restricted==1.28.6",
+    "gstreamer-plugins-libs==1.28.6",
+    "gstreamer-plugins-restricted==1.28.6",
+    "gstreamer-python==1.28.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["reachy_sage_voice*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D101", "D102", "D103", "D105", "D107"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["reachy_sage_voice"]
+known-local-folder = ["conftest"]

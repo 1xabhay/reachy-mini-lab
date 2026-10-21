@@ -204,6 +204,9 @@ class FakePetMini:
         """Just the call names, for asserting on ordering."""
         return [name for name, _ in self.calls]
 
+    def enable_motors(self) -> None:
+        self._record("enable_motors")
+
     def wake_up(self) -> None:
         self._record("wake_up")
 

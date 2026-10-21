@@ -1,10 +1,12 @@
 """The real robot and the local models, wired to the layers.
 
 Everything here is an adapter: the layers do not know that hearing is Silero,
-that the mind is a language model on this machine, or that the voice is Piper.
-Swap any one of these for something else and no layer changes.
+that the mind is the Sage kernel, or that the voice is Piper. Swap any one of
+these for something else and no layer changes.
 
-Nothing leaves the machine.
+The robot is a light client. It hears, speaks and moves; who it is, what it
+remembers and what it decides live in the Sage kernel, shared with every other
+body. Nothing leaves the machine.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import os
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import wave
 from pathlib import Path
@@ -28,7 +31,16 @@ from .conductor import Conductor
 from .events import Emote
 from .following import BodyYawFollower
 from .health import SessionHealth
-from .layers import ROBOT_GONE, Hearing, Mind, Module, Transcriber, Vision, Voice
+from .layers import (
+    ROBOT_GONE,
+    Hearing,
+    KernelUnavailableError,
+    Module,
+    SageMind,
+    Transcriber,
+    Vision,
+    Voice,
+)
 from .streaming import clamp_clauses, sentences, take_emotion
 from .supervisor import Supervisor
 from .vad import SAMPLERATE, WINDOW, Reframer, SileroVAD
@@ -49,6 +61,13 @@ WHISPER_SIZE = os.environ.get("REACHY_PET_WHISPER", "base.en")
 # 4.7 GB. A pet says one or two short sentences; a 7B is not paying for itself.
 OLLAMA_MODEL = os.environ.get("REACHY_PET_LLM", "qwen3:1.7b")
 OLLAMA_URL = os.environ.get("REACHY_PET_OLLAMA", "http://localhost:11434/api/chat")
+# The Sage kernel's device listener, and this robot's token from the kernel's SAGE_DEVICES.
+SAGE_URL = os.environ.get("REACHY_PET_SAGE_URL", "http://127.0.0.1:8766")
+SAGE_TOKEN = os.environ.get("REACHY_PET_SAGE_TOKEN", "")
+# How long to keep ignoring the mic after it stops talking. Over WebRTC the
+# speaker lags the "done" signal, and 0.25s let the tail of its own voice
+# back in as a question to answer.
+TAIL_GATE_S = float(os.environ.get("REACHY_PET_TAIL_GATE", "1.0"))
 
 #: Body language the pet can choose from, out of the 85 recorded moves. Curated
 #: so it stays good company - the library also holds `dying1` and `rage1`.
@@ -208,36 +227,59 @@ class RobotMouth:
         time.sleep(len(audio) / rate + 0.2)
 
 
-class JsonMemory:
-    """The conversation, kept in a file so a restart still knows you.
+class SageClient:
+    """Device protocol v0 over plain HTTP; see sage/docs/DEVICE-PROTOCOL.md.
 
-    Deliberately the same path the first implementation used, so a pet that has
-    been talked to before does not lose what it already knew.
+    Every way the kernel can be unreachable becomes `KernelUnavailableError`, never an
+    OSError: the session would read that as the robot itself being gone.
     """
 
-    def __init__(self, path: Path | None = None) -> None:
-        """Take the file to keep the conversation in."""
-        self.path = path if path is not None else DATA / "history.json"
+    def __init__(
+        self, url: str = SAGE_URL, token: str = SAGE_TOKEN, timeout_s: float = 5.0
+    ) -> None:
+        """Take the kernel's device listener and this robot's token."""
+        if len(token) < 32:
+            raise RuntimeError(
+                "Set REACHY_PET_SAGE_TOKEN to this robot's token from the kernel's SAGE_DEVICES"
+            )
+        self.url, self.token, self.timeout_s = url.rstrip("/"), token, timeout_s
 
-    def load(self) -> list[dict]:
-        """Read the conversation back, or start fresh if there is not one."""
+    def hello(self, manifest: dict) -> tuple[int, dict]:
+        """Say which protocol this is and what the body can do."""
+        return self._call("POST", "/v0/hello", {"protocols": [0], "manifest": manifest})
+
+    def send(self, kind: str, turn_id: str | None = None, text: str = "") -> tuple[int, dict]:
+        """Report one thing that happened on this body."""
+        body = {"kind": kind}
+        if turn_id:
+            body["turn_id"] = turn_id
+        if text:
+            body["text"] = text
+        return self._call("POST", "/v0/events", body)
+
+    def effects(self, since: int, wait: float) -> tuple[int, dict]:
+        """Wait up to `wait` seconds for anything delivered to this body after `since`."""
+        path = f"/v0/effects?since={since}&wait={wait}"
+        return self._call("GET", path, timeout_s=wait + self.timeout_s)
+
+    def _call(self, method: str, path: str, body: dict | None = None,
+              timeout_s: float | None = None) -> tuple[int, dict]:
+        data = json.dumps(body).encode() if body is not None else None
+        headers = {"Authorization": f"Bearer {self.token}"}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(self.url + path, data, headers, method=method)
         try:
-            stored = json.loads(self.path.read_text())
-        except (OSError, ValueError):
-            return []
-        if not isinstance(stored, list):
-            logger.warning("ignoring a memory file that is not a conversation")
-            return []
-        return [
-            turn
-            for turn in stored
-            if isinstance(turn, dict) and turn.get("role") in ("user", "assistant")
-        ]
-
-    def save(self, history: list[dict]) -> None:
-        """Write the conversation down."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(history))
+            with urllib.request.urlopen(request, timeout=timeout_s or self.timeout_s) as response:
+                return response.status, json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as error:
+            with error:
+                try:
+                    return error.code, json.loads(error.read() or b"{}")
+                except ValueError:
+                    return error.code, {}
+        except (OSError, ValueError) as error:  # URLError, refused, timeout, garbled
+            raise KernelUnavailableError(str(error)) from error
 
 
 class Body(Module):
@@ -405,16 +447,27 @@ def build(mini, bus: Bus | None = None) -> tuple[Bus, list[Module]]:
     moves = RecordedMoves(DEFAULT_EMOTIONS_DATASET)
     available = tuple(e for e in EMOTIONS if e in moves.list_moves())
 
+    if (DATA / "history.json").exists():
+        logger.info("%s is no longer read: Sage keeps the conversation now", DATA / "history.json")
+
     modules: list[Module] = [
         Vision(RobotEyes(mini), BodyYawFollower()),
         Hearing(
             ears,
             is_speech=vad.is_speech,
-            conductor=Conductor(frame_s=WINDOW / ears.samplerate, hangover_s=0.6),
+            conductor=Conductor(
+                frame_s=WINDOW / ears.samplerate,
+                hangover_s=0.6,
+                tail_gate_s=TAIL_GATE_S,
+                # ponytail: no barge-in until say() can be cut off. Until then
+                # an "interruption" was only its own voice, which ended the
+                # speaking state and let the rest of the clause be heard as you.
+                barge_in_s=float("inf"),
+            ),
             reset_detector=vad.reset,
         ),
         Transcriber(local_transcriber()),
-        Mind(local_mind(emotions=available), memory=JsonMemory()),
+        SageMind(SageClient(), vocabulary=available),
         Voice(RobotMouth(mini, PIPER_VOICE)),
         Body(mini, moves),
     ]
@@ -481,12 +534,19 @@ def daemon_alive(timeout_s: float = 3.0) -> bool:
         return False
 
 
-def session(mini, stop: threading.Event, heartbeat_s: float = 5.0) -> None:
-    """Run every layer until told to stop, or until the robot stops answering."""
-    # Waking up and enabling tracking are gestures, not requirements. Either
-    # can time out if the robot is still settling from a previous session, and
-    # tearing the whole session down over a cosmetic move would mean the pet
-    # never gets started on exactly the occasions it most needs to.
+def wake(mini) -> None:
+    """Turn the motors on, then make the waking gestures.
+
+    `wake_up()` alone does not enable torque, so after a robot reboot the head
+    stayed limp and every move went nowhere. Enabling is a requirement, so its
+    failure ends the session and the supervisor tries again.
+
+    Waking up and enabling tracking are gestures, not requirements. Either can
+    time out if the robot is still settling from a previous session, and tearing
+    the whole session down over a cosmetic move would mean the pet never gets
+    started on exactly the occasions it most needs to.
+    """
+    mini.enable_motors()
     for gesture, action in (
         ("wake up", mini.wake_up),
         ("start tracking", lambda: mini.start_head_tracking(weight=1.0)),
@@ -496,6 +556,10 @@ def session(mini, stop: threading.Event, heartbeat_s: float = 5.0) -> None:
         except Exception as error:
             logger.warning("could not %s (%s) - carrying on", gesture, error)
 
+
+def session(mini, stop: threading.Event, heartbeat_s: float = 5.0) -> None:
+    """Run every layer until told to stop, or until the robot stops answering."""
+    wake(mini)
     _bus, modules = build(mini)
     ended = threading.Event()
     health = SessionHealth()

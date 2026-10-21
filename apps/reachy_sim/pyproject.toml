@@ -1,0 +1,48 @@
+[project]
+name = "reachy-sim"
+version = "0.1.0"
+description = "Pollen's MuJoCo simulator of Reachy Mini as a test layer: no robot needed"
+requires-python = ">=3.12"
+dependencies = [
+    # The robot SDK version the pet runs on, with its MuJoCo backend (mujoco==3.3.0).
+    "reachy-mini[mujoco]==1.10.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[tool.uv]
+# A project of its own, outside the root workspace, so MuJoCo never moves the
+# pet's packages.
+package = false
+# The robot's media stack exactly as the pet runs it: gstreamer-plugins 1.28.8,
+# the newest, has no cp312 wheel.
+constraint-dependencies = [
+    "gstreamer-bundle==1.28.3",
+    "gstreamer-cli==1.28.6",
+    "gstreamer-ext-runtime==1.28.6",
+    "gstreamer-gtk==1.28.6",
+    "gstreamer-libs==1.28.6",
+    "gstreamer-plugins==1.28.6",
+    "gstreamer-plugins-gpl==1.28.6",
+    "gstreamer-plugins-gpl-restricted==1.28.6",
+    "gstreamer-plugins-libs==1.28.6",
+    "gstreamer-plugins-restricted==1.28.6",
+    "gstreamer-python==1.28.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# A failure in a move thread fails the test.
+filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D101", "D102", "D103", "D105", "D107"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sim"]
+known-local-folder = ["conftest"]

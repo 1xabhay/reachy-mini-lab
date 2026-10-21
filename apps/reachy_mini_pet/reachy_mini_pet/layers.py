@@ -15,6 +15,9 @@ threads, no sleeps and no timing.
 from __future__ import annotations
 
 import logging
+import re
+import time
+import uuid
 from collections.abc import Callable
 
 import numpy as np
@@ -33,7 +36,7 @@ from .events import (
     VoiceStopped,
 )
 from .following import BodyYawFollower
-from .streaming import FaceMemory
+from .streaming import FaceMemory, clamp_clauses, sentences
 from .transcripts import is_trustworthy
 
 logger = logging.getLogger("reachy_mini.pet.layers")
@@ -362,6 +365,205 @@ class Mind(Module):
             if emotion:
                 self._publish(Emote(name=emotion))
             self._publish(Reply(clauses=list(clauses), emotion=emotion, turn=self._turn))
+
+
+#: Emoji a model writes, read as the body language this robot can show instead.
+#: A speaker must never say them; a screen may show them, so the kernel keeps them.
+EMOJI_FEELINGS = {
+    "😊": "cheerful1", "🙂": "cheerful1", "😄": "cheerful1", "😀": "cheerful1", "😁": "cheerful1",
+    "😂": "laughing1", "🤣": "laughing1", "😢": "sad1", "😭": "sad1", "😞": "sad1", "🙁": "sad1",
+    "🤔": "thoughtful1", "🧐": "curious1", "😮": "surprised1", "😲": "surprised1", "🤩": "amazed1",
+    "❤": "loving1", "😍": "loving1", "🥰": "loving1", "💕": "loving1", "👍": "yes1", "✅": "yes1",
+    "👎": "no1", "👋": "welcoming1", "🤗": "welcoming1", "😳": "shy1", "🙈": "shy1", "😴": "tired1",
+    "🥱": "tired1", "😨": "scared1", "😱": "scared1", "🙏": "grateful1", "🎉": "success1",
+    "😅": "oops1", "😌": "relief1", "😕": "confused1", "😤": "impatient1",
+}
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D\u20E3]")
+
+
+def without_emoji(words: str, vocabulary: tuple[str, ...]) -> tuple[str, str]:
+    """Return (speech, feeling): emoji removed, and the first one this body can show."""
+    feeling = next((EMOJI_FEELINGS[c] for c in words if EMOJI_FEELINGS.get(c) in vocabulary), "")
+    speech = re.sub(r"\s+([!?.,;:])", r"\1", " ".join(_EMOJI.sub(" ", words).split()))
+    return speech, feeling
+
+
+class KernelUnavailableError(Exception):
+    """The Sage kernel could not be reached.
+
+    Deliberately not an OSError. The session reads OSError as the robot itself
+    being gone, so three kernel blips in a row would tear down a session whose
+    robot is perfectly fine.
+    """
+
+
+class SageMind(Module):
+    """Carries what was heard to the Sage kernel and acts out what comes back.
+
+    The pet keeps no mind of its own. Identity, memory and every decision live
+    in the kernel, shared with every other body Sage has; this layer is the
+    whole of the robot's side of that conversation. It replaces `Mind` without
+    any other layer noticing: it takes `Heard` and publishes `Emote` and `Reply`.
+    """
+
+    name = "mind"
+    period = 0.05
+
+    #: Said locally, at most once a minute, when the kernel cannot be reached.
+    offline_line = "I can't reach my memory right now."
+    #: Said once when another body has held the kernel for longer than `retry_s`.
+    busy_line = "One moment."
+
+    def __init__(
+        self,
+        kernel,
+        vocabulary=(),
+        retry_s=5.0,
+        reply_s=30.0,
+        offline_every_s=60.0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        """Take something that speaks device protocol v0, and the feelings this body can show."""
+        super().__init__()
+        self.kernel, self.vocabulary = kernel, tuple(vocabulary)
+        self.retry_s, self.reply_s, self.offline_every_s = retry_s, reply_s, offline_every_s
+        self.clock, self.sleep = clock, sleep
+        self.cursor: int | None = None
+        self.turns: dict[int, str] = {}
+        self._local = 0
+        self._offline_said: float | None = None
+        self._heard: Subscription | None = None
+        self._voice: Subscription | None = None
+
+    @property
+    def manifest(self) -> dict:
+        """What this body can do, as the kernel needs to hear it."""
+        emote = {"vocabulary": list(self.vocabulary)}
+        return {"senses": ["speech"], "effects": {"reply": {}, "emote": emote}}
+
+    def subscribe(self, bus: Bus) -> None:
+        """Listen for words, and for its own voice so the kernel knows what was really played."""
+        self._heard = bus.subscribe(Heard)
+        self._voice = bus.subscribe((VoiceStarted, VoiceStopped))
+
+    def step(self, now: float = 0.0) -> None:
+        """Report playback, then carry each thing heard to the kernel."""
+        if self.bus is None or self._heard is None:
+            return
+        self._report_playback()
+        for heard in self.bus.drain(self._heard):
+            try:
+                self._converse(heard.text)
+            except KernelUnavailableError as error:
+                logger.warning("mind: kernel unreachable (%s)", error)
+                self._say_offline()
+
+    def _report_playback(self) -> None:
+        for event in self.bus.drain(self._voice):
+            turn_id = self.turns.get(event.turn)
+            if turn_id is None:
+                continue  # a local line such as "one moment"; the kernel never asked for it
+            kind = "playback_started" if isinstance(event, VoiceStarted) else "playback_finished"
+            try:
+                self.kernel.send(kind, turn_id)
+            except KernelUnavailableError:
+                logger.info("mind: could not report %s", kind)
+
+    def _converse(self, text: str) -> None:
+        # Declared before every turn: the kernel forgets manifests when it restarts.
+        status, body = self.kernel.hello(self.manifest)
+        if status != 200:
+            raise KernelUnavailableError(f"hello refused: {body}")
+        if self.cursor is None:
+            # A fresh process starts at the head, so it never replays old replies.
+            self.cursor = body["sequence"]
+        turn_id = "reachy-" + uuid.uuid4().hex
+        if not self._admit(turn_id, text):
+            return
+        answer = self._await(turn_id)
+        if answer is None:
+            return
+        words, feeling = answer
+        words, shown = without_emoji(words, self.vocabulary)
+        feeling = feeling or shown  # the kernel's chosen feeling wins over an emoji
+        self._local += 1
+        self.turns[self._local] = turn_id
+        for old in [turn for turn in self.turns if turn <= self._local - 8]:
+            del self.turns[old]
+        if feeling:
+            self._publish(Emote(name=feeling))
+        if not words:
+            return  # nothing left to say: the body said it
+        clauses = clamp_clauses(sentences([words]))
+        self._publish(Reply(clauses=clauses, emotion=feeling, turn=self._local))
+
+    def _admit(self, turn_id: str, text: str) -> bool:
+        """Submit, retrying the same turn ID while another body holds the kernel."""
+        deadline, acknowledged = self.clock() + self.retry_s, False
+        while True:
+            status, body = self.kernel.send("submitted", turn_id, text)
+            if status == 200:
+                return True
+            code = (body or {}).get("code")
+            if code == "unknown_pending" and not acknowledged:
+                acknowledged = self._acknowledge_own()
+                if acknowledged:
+                    continue
+            if code != "busy":
+                logger.warning("mind: kernel refused the turn (%s)", body)
+                return False
+            if self.clock() >= deadline:
+                self._say([self.busy_line])
+                return False
+            self.sleep(0.25)
+
+    def _acknowledge_own(self) -> bool:
+        """Let go of this robot's own interrupted reply. It is never retried."""
+        status, body = self.kernel.effects(self.cursor or 0, 0)
+        turn = (body or {}).get("turn") or {}
+        if status != 200 or turn.get("run_status") != "unknown":
+            return False
+        logger.info("mind: letting go of interrupted turn %s", turn["turn_id"])
+        return self.kernel.send("acknowledged", turn["turn_id"])[0] == 200
+
+    def _await(self, turn_id: str) -> tuple[str, str] | None:
+        """Wait for this turn's reply. None means say nothing: failed, stale, or too late."""
+        deadline, feeling = self.clock() + self.reply_s, ""
+        while self.clock() < deadline:
+            try:
+                status, body = self.kernel.effects(self.cursor, 2.0)
+            except KernelUnavailableError:
+                self.sleep(0.5)  # ride out a blip; freshness is the kernel's call, not ours
+                continue
+            if status == 409 and body.get("code") == "reset":
+                self.cursor = body["sequence"]
+                continue
+            if status != 200:
+                return None
+            self.cursor = body["sequence"]
+            for effect in body["effects"]:
+                if effect["turn_id"] != turn_id:
+                    continue
+                if effect["kind"] == "emote" and effect["text"] in self.vocabulary:
+                    feeling = effect["text"]
+                if effect["kind"] == "reply":
+                    return None if effect["stale"] else (effect["text"], feeling)
+            turn = body.get("turn") or {}
+            ended = turn.get("run_status") in ("failed", "cancelled", "unknown")
+            if turn.get("turn_id") == turn_id and ended:
+                return None
+            self.sleep(0)
+        return None
+
+    def _say(self, clauses: list[str]) -> None:
+        self._publish(Reply(clauses=clauses, turn=0))
+
+    def _say_offline(self) -> None:
+        now = self.clock()
+        if self._offline_said is None or now - self._offline_said >= self.offline_every_s:
+            self._offline_said = now
+            self._say([self.offline_line])
 
 
 class Voice(Module):

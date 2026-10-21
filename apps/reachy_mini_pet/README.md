@@ -56,6 +56,13 @@ lets the daemon handle restarts.
 
 ## How it works
 
+The robot is a light client of the [Sage kernel](../../../sage): it hears,
+speaks and moves, while who it is, what it remembers and what it decides live
+in the kernel, shared with the browser and any other body. Start the kernel
+first (`make up` in the sage repo, with `SAGE_DEVICES=reachy=<token>` in its
+`.env`). If the kernel is unreachable the pet keeps tracking you and says once
+that it cannot reach its memory. It never falls back to a mind of its own.
+
 Six layers, each of which does one thing and announces it on a bus. None of
 them can name another, so **any one runs alone and any combination runs
 together**:
@@ -65,7 +72,7 @@ together**:
 | `Vision` | a robot that follows you round the room | `FaceSeen` `FaceLost` | — |
 | `Hearing` | knows *when* it is spoken to, without understanding | `Utterance` | `VoiceStarted` `VoiceStopped` |
 | `Transcriber` | sound → words | `Heard` | `Utterance` |
-| `Mind` | words → a reply and a feeling | `Reply` `Emote` | `Heard` |
+| `SageMind` | words → the Sage kernel → a reply and a feeling | `Reply` `Emote` | `Heard` `VoiceStarted` `VoiceStopped` |
 | `Voice` | speaks | `Spoke` `VoiceStarted` `VoiceStopped` | `Reply` |
 | `Body` | body language, from 85 recorded moves | — | `Emote` |
 
@@ -127,7 +134,10 @@ differ and no default survives contact with all of them.
 | `REACHY_PET_VOICE` | `en_GB-jenny_dioco-medium.onnx` | Piper voice file |
 | `REACHY_PET_WHISPER` | `base.en` | Whisper size, or any faster-whisper model id |
 | `REACHY_PET_LLM` | `qwen3:1.7b` | Ollama model - run `reachy-pet-bench` to pick for your hardware |
-| `REACHY_PET_OLLAMA` | `http://localhost:11434/api/chat` | Ollama endpoint |
+| `REACHY_PET_OLLAMA` | `http://localhost:11434/api/chat` | Ollama endpoint (used by `reachy-pet-bench`) |
+| `REACHY_PET_SAGE_URL` | `http://127.0.0.1:8766` | The Sage kernel's device listener |
+| `REACHY_PET_SAGE_TOKEN` | — | This robot's token, as listed in the kernel's `SAGE_DEVICES` (required) |
+| `REACHY_PET_TAIL_GATE` | `1.0` | Seconds the mic stays deaf after it speaks; raise it if it answers its own echo |
 
 ## What it does not do yet
 

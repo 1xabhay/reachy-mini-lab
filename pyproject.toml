@@ -13,6 +13,8 @@ package = false
 
 [tool.uv.workspace]
 members = ["apps/*"]
+# Its own project and .venv: Pipecat's pins must never move the pet's packages.
+exclude = ["apps/reachy_sage_voice", "apps/reachy_sim"]
 
 [tool.uv.sources]
 reachy-mini-testbench = { workspace = true }

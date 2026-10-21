@@ -1,0 +1,50 @@
+# The voice's senses, on this machine only. 8765/8766 belong to the old kernel and the pet.
+#   docker compose up -d --build        (from this folder)
+#   STT: http://127.0.0.1:8781/v1  TTS: http://127.0.0.1:8782/v1
+name: reachy-sage-voice
+
+x-sealed: &sealed
+  restart: unless-stopped
+  # Sealed: nothing on the root is writable, /tmp lives in memory, no capabilities.
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  pids_limit: 128
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  # ponytail: all 4 of Colima's CPUs each; a turn uses STT then TTS, rarely both at once.
+  cpus: 4
+
+services:
+  stt:
+    <<: *sealed
+    image: reachy-sage-stt:0.1.0
+    build: stt
+    ports:
+      - "127.0.0.1:8781:8000"
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8000/health'))['ready'] else 1)"]
+      interval: 5s
+      timeout: 3s
+      start_period: 60s
+
+  tts:
+    <<: *sealed
+    image: reachy-sage-tts:0.1.0
+    build: tts
+    ports:
+      - "127.0.0.1:8782:8000"
+    # phonemizer copies libespeak-ng into a temp dir and loads it from there, so its temp dir
+    # (TMPDIR, tts/Dockerfile) must allow exec; /tmp stays noexec.
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /run/espeak:size=16m,mode=1777,exec
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8000/health'))['ready'] else 1)"]
+      interval: 5s
+      timeout: 3s
+      start_period: 60s

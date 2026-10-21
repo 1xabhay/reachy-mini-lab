@@ -1,0 +1,16 @@
+[project]
+name = "reachy-sage-voice-services"
+version = "0.1.0"
+description = "The voice's senses as local services: Parakeet STT and Kokoro TTS, OpenAI-compatible"
+requires-python = "==3.12.*"
+dependencies = ["fastapi", "uvicorn", "numpy", "httpx"]
+
+# One environment for native runs and tests; each image installs only its own group,
+# exported with hashes into stt/requirements.lock and tts/requirements.lock (make lock).
+[dependency-groups]
+stt = ["onnx-asr[cpu,hub]==0.12.*", "soundfile", "python-multipart"]
+tts = ["kokoro-onnx==0.6.*", "huggingface-hub"]
+
+[tool.uv]
+default-groups = ["stt", "tts"]
+package = false

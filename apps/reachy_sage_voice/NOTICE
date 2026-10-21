@@ -1,0 +1,38 @@
+Reachy Sage Voice
+Copyright 2026 The Reachy Sage voice authors
+
+Licensed under the Apache License, Version 2.0 (LICENSE).
+
+This app ships no model weights. The models below are downloaded from their
+publishers when you build the services (services/) or run the Sage kernel,
+and each stays under its own licence.
+
+Models
+- Parakeet TDT 0.6B v2, NVIDIA: CC-BY-4.0. Speech to text (services/stt).
+  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
+  ONNX export used: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx (CC-BY-4.0)
+- Kokoro 82M, hexgrad: Apache-2.0. Speech (services/tts).
+  https://huggingface.co/hexgrad/Kokoro-82M
+  ONNX exports used: https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX and
+  https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX-timestamped (Apache-2.0)
+- Smart Turn v3, Pipecat: BSD-2-Clause. Turn ending when SAGE_VOICE_TURN=smart,
+  bundled in the pipecat-ai package. https://huggingface.co/pipecat-ai/smart-turn-v3
+- Silero VAD, Silero Team: MIT. Speech onset and barge-in, bundled in pipecat-ai.
+  https://github.com/snakers4/silero-vad
+- Qwen3-4B-Instruct-2507, Alibaba Qwen: Apache-2.0. A language model for the Sage
+  kernel, run by Ollama; this app never loads it.
+  https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507
+
+Software
+- Reachy Mini SDK, Pollen Robotics: Apache-2.0. https://github.com/pollen-robotics/reachy_mini
+  index.html and style.css are rendered from the SDK's app template.
+- Pipecat, Daily: BSD-2-Clause. https://github.com/pipecat-ai/pipecat
+- onnx-asr: MIT. https://github.com/istupakov/onnx-asr (services/stt)
+- kokoro-onnx: MIT. https://github.com/thewh1teagle/kokoro-onnx (services/tts)
+- phonemizer and eSpeak NG: GPL-3.0-or-later. Installed inside the TTS image you build
+  locally (services/tts); not distributed with this app.
+  https://github.com/bootphon/phonemizer https://github.com/espeak-ng/espeak-ng
+
+Test data
+- services/stt/fixtures/good-morning-little-robot.wav is synthetic: Kokoro's
+  bf_emma voice saying "Good morning, little robot.", resampled to 16 kHz.
