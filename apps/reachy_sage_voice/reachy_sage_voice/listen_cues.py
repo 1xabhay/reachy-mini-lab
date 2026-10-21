@@ -38,15 +38,16 @@ class ListenCues:
     """Body cues for the floor changing hands, driven by Pipecat's speaking events."""
 
     def __init__(self, mini, hold_s: float = 0.4, glance_s: float = 1.0, move_s: float = 0.3,
-                 weight: float = 0.5, glance=None) -> None:
+                 weight: float = 0.5, glance=None, sleep=asyncio.sleep) -> None:
         """``mini`` is a connected ReachyMini; the defaults are first guesses, to tune live.
 
         ``weight`` is the tracking weight while glancing: the share of the head
         the face keeps. ``glance`` is the offset, in the head's frame, from
-        wherever the head is; with no face tracked it shows in full.
+        wherever the head is; with no face tracked it shows in full. ``sleep`` is
+        for tests.
         """
         self.mini, self.hold_s, self.glance_s, self.move_s = mini, hold_s, glance_s, move_s
-        self.weight = weight
+        self.weight, self._sleep = weight, sleep
         self.glance = create_head_pose(pitch=-6, yaw=12) if glance is None else glance
         self.listening = False
         self._emotes = 0  # playing now
@@ -98,7 +99,7 @@ class ListenCues:
             await self._look_back()
 
     async def _after_hold(self, glance: bool) -> None:
-        await asyncio.sleep(self.hold_s)
+        await self._sleep(self.hold_s)
         self.listening = False
         if not glance or self._emotes:
             return
@@ -110,7 +111,7 @@ class ListenCues:
         await self._call("start_head_tracking", weight=self.weight)
         await self._call("goto_target", head=here @ self.glance, duration=self.move_s,
                          body_yaw=None)
-        await asyncio.sleep(self.glance_s)
+        await self._sleep(self.glance_s)
         await asyncio.shield(self._look_back())  # once begun, a return always finishes
 
     async def _look_back(self) -> None:

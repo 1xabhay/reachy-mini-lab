@@ -1,8 +1,8 @@
 """Listening cues: still while you speak, a glance away while thinking, eyes back to reply.
 
 Copied from Pollen's conversation app. The robot is a fake recording calls; the
-moments are Pipecat's own SpeakingObserver events, fed in directly. Timings are
-shrunk so a test waits milliseconds.
+moments are Pipecat's own SpeakingObserver events, fed in directly. The cue's
+sleeps last until the test ends them: no test races the wall clock.
 """
 
 import asyncio
@@ -40,8 +40,42 @@ class Mini:
         self.calls.append(("track", weight))
 
 
+class Sleeps:
+    """Stands in for asyncio.sleep: each sleep is parked until ``elapse`` ends it."""
+
+    def __init__(self):
+        self.parked = []
+
+    async def __call__(self, seconds):
+        done = asyncio.get_running_loop().create_future()
+        self.parked.append((seconds, done))
+        await done
+
+
 def cues(mini):
-    return ListenCues(mini, hold_s=HOLD, glance_s=GLANCE, move_s=0.01)
+    return ListenCues(mini, hold_s=HOLD, glance_s=GLANCE, move_s=0.01, sleep=Sleeps())
+
+
+def pending(c):
+    return [(s, done) for s, done in c._sleep.parked if not done.done()]
+
+
+async def settled(c, within=5.0):
+    """Wait until the cue in hand is parked in a sleep, or over (robot calls run on a thread)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + within
+    while not (c._later is None or c._later.done() or pending(c)):
+        assert loop.time() < deadline, "the cue never settled"
+        await asyncio.sleep(0.001)
+
+
+async def elapse(c, seconds):
+    """End the cue's pending sleep, which must be ``seconds`` long, then let it settle."""
+    await settled(c)
+    ((asked, done),) = pending(c)
+    assert asked == seconds
+    done.set_result(None)
+    await settled(c)
 
 
 async def say(c, *kinds):
@@ -78,7 +112,7 @@ async def test_a_reply_within_the_hold_releases_listening_with_no_glance():
     await say(c, Kind.USER_SPEECH_STARTED, Kind.USER_SPEECH_STOPPED)
     assert c.listening  # held through the short silence
     await say(c, Kind.BOT_SPEECH_STARTED)
-    await asyncio.sleep(HOLD + GLANCE + 0.05)
+    await settled(c)
     assert not c.listening
     assert names(mini) == ["set_target"]  # the antenna freeze, nothing else
 
@@ -88,7 +122,7 @@ async def test_thinking_glances_away_from_the_face_then_back():
     mini = Mini()
     c = cues(mini)
     await say(c, Kind.USER_SPEECH_STARTED, Kind.USER_SPEECH_STOPPED)
-    await asyncio.sleep(HOLD + 0.02)
+    await elapse(c, HOLD)
     assert not c.listening
     # The app target is pinned where the head is, then tracking lets it show
     # through, then the head eases to a small offset: no jump at the weight change.
@@ -96,7 +130,7 @@ async def test_thinking_glances_away_from_the_face_then_back():
     assert np.array_equal(mini.calls[1][2], HERE)
     glance = mini.calls[3]
     assert not np.array_equal(glance[1], HERE) and glance[2] is None  # body yaw untouched
-    await asyncio.sleep(GLANCE + 0.03)
+    await elapse(c, GLANCE)
     assert names(mini)[4:] == ["goto", ("track", 1.0)]  # back, and the tracker owns the head
     assert np.array_equal(mini.calls[4][1], HERE)
 
@@ -106,10 +140,10 @@ async def test_reply_audio_looks_back_at_once():
     mini = Mini()
     c = cues(mini)
     await say(c, Kind.USER_SPEECH_STARTED, Kind.USER_SPEECH_STOPPED)
-    await asyncio.sleep(HOLD + 0.02)
+    await elapse(c, HOLD)
     await say(c, Kind.BOT_SPEECH_STARTED)
     assert names(mini)[-2:] == ["goto", ("track", 1.0)]
-    await asyncio.sleep(GLANCE + 0.03)
+    await settled(c)
     assert names(mini).count(("track", 1.0)) == 1  # the glance's own return never runs
 
 
@@ -118,7 +152,7 @@ async def test_speaking_again_mid_glance_looks_back_and_listens():
     mini = Mini()
     c = cues(mini)
     await say(c, Kind.USER_SPEECH_STARTED, Kind.USER_SPEECH_STOPPED)
-    await asyncio.sleep(HOLD + 0.02)
+    await elapse(c, HOLD)
     await say(c, Kind.USER_SPEECH_STARTED)
     assert c.listening
     assert ("track", 1.0) in mini.calls
@@ -128,15 +162,17 @@ async def test_speaking_again_mid_glance_looks_back_and_listens():
 async def test_an_emote_owns_the_body_while_it_plays():
     mini = Mini()
     c = cues(mini)
-    started = asyncio.Event()
+    started, over = asyncio.Event(), asyncio.Event()
 
     async def emote(name, sound):
         started.set()
-        await asyncio.sleep(HOLD + GLANCE + 0.05)
+        await over.wait()
 
     play = asyncio.ensure_future(c.during(emote)("cheerful1", True))
     await started.wait()
     await say(c, Kind.USER_SPEECH_STARTED, Kind.USER_SPEECH_STOPPED)
+    await elapse(c, HOLD)  # the hold runs out mid-move
+    over.set()
     await play
     assert mini.calls == []  # no antenna freeze, no glance, mid-move
 
@@ -146,7 +182,7 @@ async def test_an_emote_mid_glance_gets_the_head_back_from_the_cue():
     mini = Mini()
     c = cues(mini)
     await say(c, Kind.USER_SPEECH_STARTED, Kind.USER_SPEECH_STOPPED)
-    await asyncio.sleep(HOLD + 0.02)
+    await elapse(c, HOLD)
     before = len(mini.calls)
 
     async def emote(name, sound):
@@ -155,7 +191,7 @@ async def test_an_emote_mid_glance_gets_the_head_back_from_the_cue():
     await c.during(emote)("cheerful1", True)
     # Tracking weight restored, but no head goto: the move is writing the head.
     assert mini.calls[before:] == [("track", 1.0)]
-    await asyncio.sleep(GLANCE + 0.03)
+    await settled(c)
     assert len(mini.calls) == before + 1
 
 
@@ -165,10 +201,10 @@ async def test_with_a_turn_detector_only_the_end_of_the_turn_is_thinking():
     mini = Mini()
     c = cues(mini)
     await say(c, Kind.USER_SPEECH_STARTED, Kind.USER_TURN_STARTED, Kind.USER_SPEECH_STOPPED)
-    await asyncio.sleep(HOLD + GLANCE + 0.03)
+    await elapse(c, HOLD)
     assert not c.listening and names(mini) == ["set_target"]  # a pause: no glance
     await say(c, Kind.USER_TURN_STOPPED)
-    await asyncio.sleep(HOLD + 0.02)
+    await elapse(c, HOLD)
     assert ("track", c.weight) in mini.calls
 
 
@@ -180,5 +216,6 @@ async def test_a_robot_that_refuses_a_cue_never_stops_the_voice():
 
     c = cues(Broken())
     await say(c, Kind.USER_SPEECH_STARTED, Kind.USER_SPEECH_STOPPED)
-    await asyncio.sleep(HOLD + GLANCE + 0.05)
+    await elapse(c, HOLD)
+    await elapse(c, GLANCE)
     await say(c, Kind.BOT_SPEECH_STARTED)
