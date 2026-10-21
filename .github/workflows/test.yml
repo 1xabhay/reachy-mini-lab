@@ -19,6 +19,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The reachy_mini SDK builds PyGObject/pycairo (same packages as Pollen's CI)
+      - run: sudo apt-get update && sudo apt-get install -y libcairo2-dev libgirepository1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gir1.2-gst-plugins-base-1.0 gstreamer1.0-nice
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - run: uv sync --locked
       - run: uv run pytest -q
@@ -42,7 +44,7 @@ jobs:
           ref: v0.1.0
           path: sage-kernel
           persist-credentials: false
-      - run: sudo apt-get update && sudo apt-get install -y libosmesa6
+      - run: sudo apt-get update && sudo apt-get install -y libosmesa6 libcairo2-dev libgirepository1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gir1.2-gst-plugins-base-1.0 gstreamer1.0-nice
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - run: uv sync --locked
       - run: uv run pytest -q
