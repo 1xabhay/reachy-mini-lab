@@ -7,6 +7,7 @@ speaks protocol v1's shapes without HTTP (test_kernel.py covers the wire).
 """
 
 import asyncio
+import time
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -33,9 +34,10 @@ TURN = "<turn>"  # replaced by the turn id the processor chose
 class FakeSession:
     """Answers polls from a script, then holds the long poll open, as a quiet kernel does."""
 
-    def __init__(self, polls=(), admit="admitted"):
+    def __init__(self, polls=(), admit="admitted", idle=False):
         self.polls = list(polls)
         self.admit = admit
+        self.idle = idle  # answer polls before any turn: the kernel starts one itself
         self.started: list[tuple[str, str, dict]] = []
         self.results: list[dict] = []
         self.stops: list[str] = []
@@ -48,11 +50,11 @@ class FakeSession:
         return self.admit
 
     async def poll(self, offset, wait):
+        while not (self.polls and (self.started or self.idle)):  # nothing to say yet: quiet
+            await asyncio.sleep(0.01)
         self.offsets.append(offset)
-        if not self.polls:
-            await asyncio.Event().wait()
         body = self.polls.pop(0)
-        turn_id = self.started[-1][0]
+        turn_id = self.started[-1][0] if self.started else None
         for effect in body.get("effects", []):
             if effect.get("turn_id") == TURN:
                 effect["turn_id"] = turn_id
@@ -294,6 +296,33 @@ def test_a_turn_replaced_mid_reply_clears_its_words_from_the_voice():
     assert kinds == [LLMTextFrame, InterruptionFrame]
 
 
+def test_a_turn_the_kernel_starts_itself_is_spoken_and_reported():
+    # A greeting on a presence "seen": no transcript started it, yet it is this body's to say.
+    session = FakeSession([{"effects": [{"sequence": 7, "kind": "reply", "turn_id": "kernel-1",
+                                         "text": "Hello again!", "stale": False}]}], idle=True)
+    down, _ = run(make(session), [SleepFrame(0.1), BotStartedSpeakingFrame(),
+                                  BotStoppedSpeakingFrame(), SleepFrame(0.1)])
+    assert spoken(down) == ["Hello again!"]
+    assert session.results == [{"sequence": 7, "status": "done", "timing": {}}]
+    assert session.started == []
+
+
+def test_after_an_interruption_the_body_still_listens_for_the_kernel():
+    kernel_turn = {"sequence": 7, "kind": "reply", "turn_id": "kernel-1", "text": "Hello again!",
+                   "stale": False}
+    session = FakeSession([{"effects": [kernel_turn]}])
+
+    async def greet_later():
+        await asyncio.sleep(0.3)  # after the barge-in
+        session.idle = True
+
+    async def go():
+        return (await asyncio.gather(run_test(make(session), frames_to_send=[
+            SleepFrame(0.1), InterruptionFrame(), SleepFrame(0.4)]), greet_later()))[0]
+    down, _ = asyncio.run(go())
+    assert spoken(down) == ["Hello again!"]
+
+
 def test_interim_transcripts_are_not_turns():
     session = FakeSession()
     run(make(session), [InterimTranscriptionFrame(text="hi", user_id="you", timestamp=""),
@@ -311,24 +340,32 @@ def test_reachy_hearing_itself_is_not_sent_to_the_kernel():
 
 def test_over_http_a_streamed_turn_ends_with_a_done_result(kernel):
     """The real client and session against the scripted kernel, end to end."""
-    def turn(fake):
-        return fake.events("submitted")[0]["turn_id"]
+    def turn_polls(fake):
+        """List the long polls since the turn was submitted (before it, the voice listens too)."""
+        start = next((i for i, r in enumerate(fake.requests)
+                      if (r["body"] or {}).get("kind") == "submitted"), len(fake.requests))
+        return [r["query"] for r in fake.requests[start:] if r["method"] == "GET"]
+
+    def effects(fake):
+        polls = len(turn_polls(fake))
+        if polls in (1, 2):
+            turn = fake.events("submitted")[0]["turn_id"]
+            return 200, {"sequence": 40 + polls, "effects": [
+                {"kind": "reply_delta", "turn_id": turn, "offset": 0, "text": "Hi"} if polls == 1
+                else {"sequence": 42, "kind": "reply", "turn_id": turn, "text": "Hi there.",
+                      "stale": False}]}
+        time.sleep(0.1)  # a quiet long poll
+        return 200, {"sequence": 42 if polls else 40, "effects": []}
 
     kernel.script("POST", "/v1/hello", (200, {"protocol": 1, "sequence": 40}))
     kernel.script("POST", "/v1/events", (200, {"sequence": 41}))
-    kernel.script("GET", "/v1/effects",
-                  lambda k: (200, {"sequence": 41, "effects": [
-                      {"kind": "reply_delta", "turn_id": turn(k), "offset": 0, "text": "Hi"}]}),
-                  lambda k: (200, {"sequence": 42, "effects": [
-                      {"sequence": 42, "kind": "reply", "turn_id": turn(k), "text": "Hi there.",
-                       "stale": False}]}),
-                  (200, {"sequence": 42, "effects": []}))
+    kernel.script("GET", "/v1/effects", effects)
     session = Session(KernelClient(kernel.url, TOKEN), {"senses": ["speech"], "tools": []})
     down, _ = run(SageProcessor(session, lambda name, sound: None, Playback()),
                   [heard("hello"), SleepFrame(0.2), BotStartedSpeakingFrame(),
                    BotStoppedSpeakingFrame(), SleepFrame(0.2)])
     assert spoken(down) == ["Hi", " there."]
-    polls = [r["query"] for r in kernel.requests if r["method"] == "GET"]
+    polls = turn_polls(kernel)
     assert polls[0]["since"] == ["40"] and polls[1]["offset"] == ["2"]
     (result,) = kernel.events("result")
     assert result["sequence"] == 42 and result["status"] == "done"
