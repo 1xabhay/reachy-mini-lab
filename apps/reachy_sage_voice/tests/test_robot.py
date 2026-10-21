@@ -18,6 +18,9 @@ class Client:
     def disconnect(self):
         self.closed = True
 
+    def is_connected(self):
+        return self.alive
+
 
 class Mini:
     def __init__(self):
@@ -41,6 +44,9 @@ class Mini:
     async def async_play_move(self, move):
         self._send(("move", move))
 
+    def get_tracked_face(self, wait=True):  # the cached status: never raises, may be stale
+        return type("Face", (), {"detected": True})()
+
 
 def robot(now=lambda: 100.0):
     mini, clients = Mini(), []
@@ -60,10 +66,17 @@ def test_a_lost_connection_reconnects_once_rearms_the_robot_and_retries():
     assert mini.calls == ["enable_motors", ("track", 1.0), "goto"]
 
 
-def test_an_emote_reconnects_too():
+def test_an_emote_reconnects_then_is_skipped_since_a_late_emote_is_wrong():
     pet, mini, clients = robot()
-    asyncio.run(pet.async_play_move("cheerful1"))
-    assert len(clients) == 1 and mini.calls[-1] == ("move", "cheerful1")
+    assert asyncio.run(pet.async_play_move("cheerful1")) is None
+    assert len(clients) == 1 and mini.calls == ["enable_motors", ("track", 1.0)]
+
+
+def test_a_face_read_on_a_dead_connection_reconnects_and_reports_no_face():
+    pet, mini, clients = robot()
+    assert pet.get_tracked_face(wait=False).detected is False
+    assert len(clients) == 1 and mini.calls == ["enable_motors", ("track", 1.0)]
+    assert pet.get_tracked_face(wait=False).detected is True
 
 
 def test_at_most_one_reconnect_per_ten_seconds():
